@@ -215,7 +215,7 @@ begin
     on conflict (plate) do nothing;
   inserted := found;
   insert into public.plate_lookup_events (user_id, plate, cache_hit, simulated_cost)
-    values (auth.uid(), normalized_plate, not inserted, case when inserted then 0.07 else 0);
+    values (auth.uid(), normalized_plate, not inserted, case when inserted then 0.07 else 0 end);
   return query select not inserted, case when inserted then 0.07::numeric else 0::numeric end;
 end;
 $$;

@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/admin", "destination": "/index.html" },
+    { "source": "/admin/login", "destination": "/index.html" },
+    { "source": "/app", "destination": "/index.html" },
+    { "source": "/registrar", "destination": "/index.html" },
+    { "source": "/login", "destination": "/index.html" },
+    { "source": "/entregador", "destination": "/index.html" },
+    { "source": "/loja/:slug", "destination": "/index.html" }
+  ]
+}
