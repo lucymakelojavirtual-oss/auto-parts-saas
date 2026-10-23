@@ -1,0 +1,14 @@
+{
+  "id": "/",
+  "name": "Vancely Autopeças",
+  "short_name": "Vancely",
+  "description": "Encontre peças compatíveis com seu veículo.",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f6f1",
+  "theme_color": "#f5f6f1",
+  "icons": [
+    { "src": "/vancely-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
