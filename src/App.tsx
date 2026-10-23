@@ -3,13 +3,25 @@ import type { User } from '@supabase/supabase-js'
 import { ArrowLeft, ArrowRight, LifeBuoy, LockKeyhole, MessageCircle, Send, Store, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
-type Plan = { id: string; name: string; monthly_price: number }
+type Plan = {
+  id: string
+  name: string
+  monthly_price: number
+  commission_rate: number
+  max_products: number
+  monthly_nfe_limit: number
+  max_sellers: number
+  max_couriers: number
+}
 type Membership = { tenant_id: string; role: string }
 type Portal = { tenantId: string; tenantName: string; role: string; slug: string }
 type Conversation = { id: string; tenant_id: string; subject: string; status: string; created_at: string }
 type SupportMessage = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string }
 
 const money = (amount: number) => amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+const TERMS_VERSION = '2026-10-23-v1'
+const SUPPORT_EMAIL = import.meta.env.VITE_SUPPORT_EMAIL || 'vancelysoftware@gmail.com'
+const SUPPORT_WHATSAPP = import.meta.env.VITE_SUPPORT_WHATSAPP || '5592920021316'
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado. Tente novamente.'
@@ -173,7 +185,9 @@ function RegistrationPage() {
     void (async () => {
       try {
         const { data, error: plansError } = await requireSupabase()
-          .from('plans').select('id, name, monthly_price').eq('is_active', true).order('monthly_price')
+          .from('plans')
+          .select('id, name, monthly_price, commission_rate, max_products, monthly_nfe_limit, max_sellers, max_couriers')
+          .eq('is_active', true).order('monthly_price')
         if (plansError) throw plansError
         if (active) setPlans((data ?? []) as Plan[])
       } catch (reason) {
@@ -209,6 +223,8 @@ function RegistrationPage() {
         owner_name: fields.owner_name.trim(),
         plan_id: fields.plan_id,
         terms_accepted: termsAccepted,
+        terms_version: TERMS_VERSION,
+        terms_accepted_at: new Date().toISOString(),
       }
       const { data, error: signUpError } = await client.auth.signUp({
         email: fields.email,
@@ -266,15 +282,38 @@ function RegistrationPage() {
           <label>Plano
             <select required value={fields.plan_id} onChange={(event) => update('plan_id', event.target.value)} disabled={loadingPlans || plans.length === 0}>
               <option value="">{loadingPlans ? 'Carregando planos…' : 'Selecione um plano'}</option>
-              {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {money(plan.monthly_price)}/mês</option>)}
+              {plans.map((plan) => <option key={plan.id} value={plan.id}>
+                {plan.name} · {money(plan.monthly_price)}/mês · {Number(plan.commission_rate) * 100}% comissão · {plan.max_products.toLocaleString('pt-BR')} produtos · {plan.monthly_nfe_limit.toLocaleString('pt-BR')} NF-e
+              </option>)}
             </select>
           </label>
           {!loadingPlans && plans.length === 0 && <p className="form-message">Nenhum plano ativo foi configurado no Supabase. A equipe Vancely precisa cadastrar Essencial, Aceleração e Sede para liberar o cadastro.</p>}
+          <details className="terms-details">
+            <summary>Leia os Termos de Uso, Licenciamento e Cancelamento (versão {TERMS_VERSION})</summary>
+            <article className="terms-content">
+              <p><b>CONTRATADA:</b> VANCELY SOFTWARE, sob a responsabilidade de VANCELY SOFTWARE (Pessoa Física/Empresário Individual - CPF: 018.339.682-04), com suporte pelo e-mail <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> e telefone/WhatsApp <a href={`https://wa.me/${SUPPORT_WHATSAPP}`} target="_blank" rel="noreferrer">(92) 92002-1316</a>.</p>
+              <p><b>CONTRATANTE:</b> A Pessoa Física ou Jurídica (Dono da Auto Peças) devidamente cadastrada na plataforma Vancely Software.</p>
+              <h3>1. Do objeto</h3>
+              <p>1.1 O presente contrato concede ao CONTRATANTE uma licença de uso limitada, não exclusiva, intransferível e revogável da plataforma "Vancely Software" (Software como Serviço - SaaS), para gestão de vendas, vitrine B2C, controle de catálogo e gestão de entregas de autopeças.</p>
+              <h3>2. Do direito de arrependimento e política de cancelamento (7 dias)</h3>
+              <p>2.1 Conforme o Artigo 49 do Código de Defesa do Consumidor (Lei nº 8.078/1990), o CONTRATANTE poderá solicitar o cancelamento da assinatura e o reembolso integral do valor pago no prazo de até 7 (sete) dias corridos a contar da data de assinatura/contratação do plano.</p>
+              <p>2.2 Para solicitar o cancelamento com reembolso em até 7 dias, o CONTRATANTE deverá enviar uma solicitação formal via e-mail para <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> ou pelo canal oficial de suporte via WhatsApp <a href={`https://wa.me/${SUPPORT_WHATSAPP}`} target="_blank" rel="noreferrer">(92) 92002-1316</a>.</p>
+              <p>2.3 Após o prazo de 7 (sete) dias, a assinatura poderá ser cancelada a qualquer momento através do painel de controle, porém sem restituição proporcional de valores referentes à mensalidade vigente (modelo de renovação recorrente por ciclo).</p>
+              <h3>3. Das responsabilidades fiscais, tributárias e legais do lojista</h3>
+              <p>3.1 <b>Isenção de Responsabilidade Fiscal da CONTRATADA:</b> A Vancely Software disponibiliza ferramentas e integrações tecnológicas (incluindo emissão via Focus NFe e consultas de dados). Contudo, a CONTRATADA <b>NÃO</b> se responsabiliza pelas obrigações tributárias, fiscais, trabalhistas ou emissão incorreta de documentos fiscais por parte do CONTRATANTE.</p>
+              <p>3.2 Toda e qualquer responsabilidade pelo recolhimento de impostos, veracidade das alíquotas (NCM, ICMS, PIS/COFINS), tributação sobre autopeças e cumprimento da legislação fiscal vigente é exclusivamente do <b>CONTRATANTE (Dono da Auto Peças)</b>.</p>
+              <p>3.3 O CONTRATANTE declara ter ciência e se responsabiliza integralmente pelas garantias, trocas, devoluções e atendimento pós-venda em conformidade com o Código de Defesa do Consumidor perante os seus Clientes Finais (compradores das peças).</p>
+              <h3>4. Das micro-taxas de infraestrutura e reuso de cache (R$ 0,03)</h3>
+              <p>4.1 O CONTRATANTE declara ciência de que o reuso de dados de veículos/placas salvos no banco de dados centralizado após a perda do cache local do dispositivo do cliente estará sujeito à taxa de recuperação de infraestrutura de <b>R$ 0,03 (três centavos)</b> por consulta realizada no banco de dados, sendo contabilizado em fatura/extrato de uso.</p>
+              <h3>5. Privacidade e proteção de dados (LGPD)</h3>
+              <p>5.1 A Vancely Software atua em conformidade com a Lei Geral de Proteção de Dados (Lei nº 13.709/2018), tratando os dados dos clientes finais exclusivamente para o cumprimento da prestação de serviços do software.</p>
+            </article>
+          </details>
           <label className="auth-checkbox">
             <input type="checkbox" required checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} />
-            <span>Li e aceito os Termos de Licença, Garantia e a Política de Cancelamento de 7 dias.</span>
+            <span>Li e aceito os Termos de Uso, Licenciamento de Software e Política de Cancelamento de 7 dias acima.</span>
           </label>
-          <p className="legal-notice">Os textos legais definitivos devem ser publicados e revisados antes da abertura do cadastro em produção.</p>
+          <p className="legal-notice">O aceite será associado à versão {TERMS_VERSION}. Recomendamos revisão jurídica do texto antes de iniciar a operação comercial.</p>
           {error && <p className="form-message form-error" role="alert">{error}</p>}
           {notice && <p className="form-message" role="status">{notice} <a href="/login">Ir para login</a></p>}
           <button className="auth-button auth-button-primary" type="submit" disabled={busy || loadingPlans || plans.length === 0}>
@@ -597,8 +636,8 @@ function SupportDialog({ user, tenantId, admin = false, onClose }: { user: User;
             </> : <div className="empty-chat">Selecione uma conversa ou comece pela triagem.</div>}
             {error && <p className="form-message form-error" role="alert">{error}</p>}
             {!admin && <div className="support-contact-links">
-              {import.meta.env.VITE_SUPPORT_WHATSAPP ? <a href={`https://wa.me/${import.meta.env.VITE_SUPPORT_WHATSAPP}`} target="_blank" rel="noreferrer">WhatsApp</a> : <span>WhatsApp não configurado</span>}
-              {import.meta.env.VITE_SUPPORT_EMAIL ? <a href={`mailto:${import.meta.env.VITE_SUPPORT_EMAIL}`}>E-mail</a> : <span>E-mail não configurado</span>}
+              <a href={`https://wa.me/${SUPPORT_WHATSAPP}`} target="_blank" rel="noreferrer">WhatsApp</a>
+              <a href={`mailto:${SUPPORT_EMAIL}`}>E-mail</a>
             </div>}
           </section>
         </div>
