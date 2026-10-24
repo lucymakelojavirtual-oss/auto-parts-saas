@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, LifeBuoy, LockKeyhole, MessageCircle, Send, Store, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ChartNoAxesCombined, LifeBuoy, LockKeyhole, MessageCircle, Palette, RefreshCw, Send, Store, Upload, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
 type Plan = {
@@ -14,9 +14,53 @@ type Plan = {
   max_couriers: number
 }
 type Membership = { tenant_id: string; role: string }
-type Portal = { tenantId: string; tenantName: string; role: string; slug: string }
+type Portal = {
+  tenantId: string
+  tenantName: string
+  role: string
+  slug: string
+  logoUrl: string | null
+  brand: { app_name?: string; primary_color?: string; tagline?: string }
+}
 type Conversation = { id: string; tenant_id: string; subject: string; status: string; created_at: string }
 type SupportMessage = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string }
+type MasterStoreMetrics = {
+  id: string
+  name: string
+  slug: string
+  status: string
+  created_at: string
+  plan_name: string | null
+  monthly_price: number | null
+  commission_rate: number | null
+  subscription_status: string | null
+  current_period_end: string | null
+  monthly_paid_sales: number
+  monthly_paid_orders: number
+  monthly_delivered: number
+  monthly_delivery_fees: number
+  monthly_route_fee_estimate: number
+  monthly_average_distance_km: number | null
+  monthly_split_amount: number
+  monthly_split_count: number
+  monthly_split_settled: number
+}
+type MasterDashboardData = {
+  generated_at: string
+  stores: MasterStoreMetrics[]
+  plate_lookups: {
+    daily: number; weekly: number; monthly: number; yearly: number
+    daily_api: number; weekly_api: number; monthly_api: number; yearly_api: number
+    monthly_api_cost: number; monthly_cache_fee_estimate: number
+  }
+  monthly_trend: {
+    month: string
+    split_revenue: number
+    settled_split_revenue: number
+    renewals_forecast: number
+    renewals_forecast_amount: number
+  }[]
+}
 
 const money = (amount: number) => amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const TERMS_VERSION = '2026-10-23-v1'
@@ -25,6 +69,33 @@ const SUPPORT_WHATSAPP = import.meta.env.VITE_SUPPORT_WHATSAPP || '5592920021316
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado. Tente novamente.'
+}
+
+function monthDisplayDate(value: string) {
+  const [year, month] = value.slice(0, 7).split('-').map(Number)
+  return new Date(year, month - 1, 15, 12)
+}
+
+function convertLogoToWebP(file: File): Promise<Blob> {
+  return createImageBitmap(file).then((image) => {
+    const scale = Math.min(1, 512 / Math.max(image.width, image.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(image.width * scale))
+    canvas.height = Math.max(1, Math.round(image.height * scale))
+    const context = canvas.getContext('2d')
+    if (!context) {
+      image.close()
+      throw new Error('Não foi possível preparar a imagem da logomarca.')
+    }
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    image.close()
+    return new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('Não foi possível converter a logomarca para WebP.'))
+      }, 'image/webp', 0.88)
+    })
+  })
 }
 
 function isAdminUser(user: User) {
@@ -65,7 +136,7 @@ async function resolvePortal(user: User): Promise<Portal> {
   if (!member) throw new Error('Não foi possível localizar o acesso da sua loja.')
   const { data: tenant, error: tenantError } = await client
     .from('tenants')
-    .select('name, slug')
+    .select('name, slug, logo_url, brand')
     .eq('id', member.tenant_id)
     .maybeSingle()
   if (tenantError) throw tenantError
@@ -75,6 +146,8 @@ async function resolvePortal(user: User): Promise<Portal> {
     tenantName: String(tenant.name),
     slug: String(tenant.slug),
     role: member.role,
+    logoUrl: typeof tenant.logo_url === 'string' ? tenant.logo_url : null,
+    brand: (tenant.brand ?? {}) as Portal['brand'],
   }
 }
 
@@ -392,7 +465,7 @@ function ProtectedPage({ path }: { path: string }) {
   if (error) return <PageMessage title="Acesso indisponível" message={error} link={path === '/admin' ? '/admin/login' : '/login'} linkText="Ir para login" />
   if (path === '/admin' && user) return <AdminDashboard user={user} onLogout={logout} />
   if (!portal || !user) return <PageMessage title="Acesso indisponível" message="Não encontramos um perfil associado a esta conta." link="/login" linkText="Ir para login" />
-  if (path === '/entregador') return <CourierPortal user={user} onLogout={logout} />
+  if (path === '/entregador') return <CourierPortal user={user} portal={portal} onLogout={logout} />
   return <MerchantPortal user={user} portal={portal} onLogout={logout} />
 }
 
@@ -405,29 +478,102 @@ function MerchantPortal({ user, portal, onLogout }: { user: User; portal: Portal
   return (
     <main className="portal-page">
       <PortalHeader user={user} title={portal.tenantName} onLogout={onLogout} />
-      <section className="portal-content">
+      <section className="portal-content" style={{ '--store-color': portal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
         <p className="eyebrow">AMBIENTE DA LOJA · {portal.role.toUpperCase()}</p>
         <h1>Bem-vindo à {portal.tenantName}</h1>
         <p className="auth-description">O acesso está autenticado e isolado para esta loja. Os módulos operacionais serão habilitados conforme as APIs de produção forem conectadas.</p>
         <div className="portal-cards">
-          <article><Store size={20} /><h2>Dados da loja</h2><p>Vitrine: <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer">/loja/{portal.slug}</a></p></article>
+          <article><Store size={20} /><h2>Dados da loja</h2>{portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}<p>Vitrine: <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer">/loja/{portal.slug}</a></p></article>
           <article><LifeBuoy size={20} /><h2>Suporte</h2><p>Triagem inicial e atendimento humano pela central Vancely.</p><button className="auth-button auth-button-secondary" onClick={() => setSupportOpen(true)}>Abrir suporte</button></article>
           <article><LockKeyhole size={20} /><h2>Integrações</h2><p>Catálogo, pedidos, faturamento e entregas aguardam configuração das APIs correspondentes.</p></article>
         </div>
+        <section className="portal-panel">
+          <div className="portal-panel-heading"><div><p className="eyebrow">APLICATIVOS DA LOJA</p><h2>Experiências PWA</h2></div><span>Disponíveis na estrutura atual</span></div>
+          <div className="pwa-links">
+            <a href="/app"><Store size={17} /><span><b>Lojista + vendedor</b><small>/app · acesso por perfil</small></span></a>
+            <a href="/entregador"><ArrowRight size={17} /><span><b>Motoboy</b><small>/entregador · requer perfil courier</small></span></a>
+            <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer"><Store size={17} /><span><b>Cliente</b><small>/loja/{portal.slug}</small></span></a>
+          </div>
+        </section>
+        {['owner', 'admin', 'manager'].includes(portal.role) && <TenantBrandSettings portal={portal} />}
       </section>
       {supportOpen && <SupportDialog user={user} tenantId={portal.tenantId} onClose={() => setSupportOpen(false)} />}
     </main>
   )
 }
 
-function CourierPortal({ user, onLogout }: { user: User; onLogout: () => void }) {
+function TenantBrandSettings({ portal }: { portal: Portal }) {
+  const [appName, setAppName] = useState(portal.brand.app_name ?? portal.tenantName)
+  const [primaryColor, setPrimaryColor] = useState(portal.brand.primary_color ?? '#293125')
+  const [tagline, setTagline] = useState(portal.brand.tagline ?? '')
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const client = requireSupabase()
+      let logoUrl = portal.logoUrl
+      if (logoFile) {
+        const image = await convertLogoToWebP(logoFile)
+        const path = `tenants/${portal.tenantId}/brand/logo.webp`
+        const { error: uploadError } = await client.storage.from('tenant-media').upload(path, image, {
+          cacheControl: '3600',
+          contentType: 'image/webp',
+          upsert: true,
+        })
+        if (uploadError) throw uploadError
+        logoUrl = `${client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl}?v=${Date.now()}`
+      }
+      const { error: updateError } = await client.rpc('update_tenant_brand', {
+        p_tenant_id: portal.tenantId,
+        p_app_name: appName.trim(),
+        p_primary_color: primaryColor,
+        p_tagline: tagline.trim(),
+        p_logo_url: logoUrl,
+      })
+      if (updateError) throw updateError
+      setLogoFile(null)
+      setNotice('Identidade visual salva. A vitrine pública já pode usar a logomarca e a cor escolhidas.')
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
-    <main className="portal-page">
-      <PortalHeader user={user} title="Área do entregador" onLogout={onLogout} />
+    <section className="portal-panel">
+      <div className="portal-panel-heading"><div><p className="eyebrow">PERSONALIZAÇÃO WHITE-LABEL</p><h2><Palette size={17} /> Aparência dos aplicativos</h2></div></div>
+      <form className="brand-settings-form" onSubmit={save}>
+        <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} /></label>
+        <label>Cor principal<input type="color" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} /></label>
+        <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" /></label>
+        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP antes do envio.'}</small></label>
+        {error && <p className="form-message form-error" role="alert">{error}</p>}
+        {notice && <p className="form-message" role="status">{notice}</p>}
+        <button className="auth-button auth-button-primary" type="submit" disabled={busy}>
+          <Upload size={15} /> {busy ? 'Salvando…' : 'Salvar personalização'}
+        </button>
+      </form>
+    </section>
+  )
+}
+
+function CourierPortal({ user, portal, onLogout }: { user: User; portal: Portal; onLogout: () => void }) {
+  return (
+    <main className="portal-page" style={{ '--store-color': portal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
+      <PortalHeader user={user} title={`Entregas · ${portal.tenantName}`} onLogout={onLogout} />
       <section className="portal-content">
         <p className="eyebrow">PWA DO ENTREGADOR</p>
+        {portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}
         <h1>Olá, {user.user_metadata?.full_name ?? user.email}</h1>
-        <p className="auth-description">Você está autenticado como entregador. Corridas, rotas e carteira serão exibidas quando as APIs de pedidos, mapas e pagamentos estiverem configuradas.</p>
+        <p className="auth-description">{portal.brand.tagline || `Você está autenticado como entregador da ${portal.tenantName}.`} Corridas, rotas e carteira serão exibidas quando as APIs de pedidos, mapas e pagamentos estiverem configuradas.</p>
         <a className="auth-subtle-link" href="/app">Acessar ambiente da loja</a>
       </section>
     </main>
@@ -439,19 +585,41 @@ function PortalHeader({ user, title, onLogout }: { user: User; title: string; on
 }
 
 function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const [tenants, setTenants] = useState<{ id: string; name: string; slug: string; status: string }[]>([])
+  const [dashboard, setDashboard] = useState<MasterDashboardData | null>(null)
   const [error, setError] = useState('')
   const [supportOpen, setSupportOpen] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [selectedMonth, setSelectedMonth] = useState('')
+
+  async function loadAnalytics() {
+    setLoading(true)
+    setError('')
+    try {
+      const { data, error: queryError } = await requireSupabase().rpc('get_master_dashboard_analytics')
+      if (queryError) throw queryError
+      const result = data as MasterDashboardData
+      setDashboard(result)
+      setSelectedMonth((current) => current || result.monthly_trend.at(-1)?.month || '')
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
-    let active = true
-    void requireSupabase().from('tenants').select('id, name, slug, status').order('created_at', { ascending: false })
-      .then(({ data, error: queryError }) => {
-        if (!active) return
-        if (queryError) setError(queryError.message)
-        else setTenants((data ?? []) as typeof tenants)
-      })
-    return () => { active = false }
+    void loadAnalytics()
   }, [])
+
+  const stores = dashboard?.stores ?? []
+  const selectedTrend = dashboard?.monthly_trend.find((trend) => trend.month === selectedMonth)
+  const monthlySales = stores.reduce((total, store) => total + Number(store.monthly_paid_sales), 0)
+  const monthlySplit = stores.reduce((total, store) => total + Number(store.monthly_split_amount), 0)
+  const monthlyDeliveries = stores.reduce((total, store) => total + Number(store.monthly_delivered), 0)
+  const monthlyDeliveryFees = stores.reduce((total, store) => total + Number(store.monthly_delivery_fees), 0)
+  const monthlyRouteFees = stores.reduce((total, store) => total + Number(store.monthly_route_fee_estimate), 0)
+  const trendMax = Math.max(1, ...(dashboard?.monthly_trend ?? []).flatMap((trend) => [Number(trend.split_revenue), Number(trend.renewals_forecast_amount)]))
+
   return (
     <main className="portal-page">
       <PortalHeader user={user} title="Software Pai Vancely" onLogout={onLogout} />
@@ -459,16 +627,86 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
         <p className="eyebrow">ADMINISTRAÇÃO SAAS</p>
         <h1>Central Vancely</h1>
         <p className="auth-description">Acesso administrativo verificado pelo perfil seguro do Supabase Auth.</p>
-        <div className="portal-cards">
-          <article><Store size={20} /><h2>Lojistas</h2><p>{tenants.length} lojas registradas</p></article>
-          <article><MessageCircle size={20} /><h2>Atendimento</h2><p>Central de chamados com atualização em tempo real.</p><button className="auth-button auth-button-primary" onClick={() => setSupportOpen(true)}>Abrir central de suporte</button></article>
-          <article><LockKeyhole size={20} /><h2>Faturamento e integrações</h2><p>Micropagamentos, notas fiscais e integrações serão exibidos quando suas APIs estiverem configuradas.</p></article>
+        <div className="admin-heading-actions">
+          <span>{dashboard ? `Atualizado ${new Date(dashboard.generated_at).toLocaleTimeString('pt-BR')}` : 'Painel de métricas'}</span>
+          <button className="auth-button auth-button-secondary" onClick={() => void loadAnalytics()} disabled={loading}><RefreshCw size={15} /> Atualizar</button>
         </div>
+        {error && <p className="form-message form-error" role="alert">{error}</p>}
+        {loading && !dashboard ? <p className="auth-description">Carregando métricas da plataforma…</p> : dashboard && <>
+          <div className="admin-metrics-grid">
+            <article><Store size={18} /><span>Lojas cadastradas</span><b>{stores.length}</b><small>{stores.filter((store) => store.status === 'active').length} ativas</small></article>
+            <article><ChartNoAxesCombined size={18} /><span>Vendas pagas neste mês</span><b>{money(monthlySales)}</b><small>Subtotal registrado nos pedidos pagos</small></article>
+            <article><LockKeyhole size={18} /><span>Split gerado neste mês</span><b>{money(monthlySplit)}</b><small>Receita reconhecida somente após liquidação: {money(stores.reduce((total, store) => total + Number(store.monthly_split_settled), 0))}</small></article>
+            <article><ArrowRight size={18} /><span>Entregas concluídas</span><b>{monthlyDeliveries}</b><small>Fretes registrados: {money(monthlyDeliveryFees)}</small></article>
+          </div>
+          <div className="admin-analytics-grid">
+            <section className="portal-panel">
+              <div className="portal-panel-heading"><div><p className="eyebrow">12 MESES</p><h2>Splits e renovações previstas</h2></div><div className="admin-chart-legend"><span><i /> Split</span><span><i /> Renovação prevista</span></div></div>
+              <div className="admin-chart" role="group" aria-label="Gráfico mensal interativo de split e renovações previstas">
+                {dashboard.monthly_trend.map((trend) => {
+                  const splitHeight = Math.max(2, Number(trend.split_revenue) / trendMax * 100)
+                  const renewalHeight = Math.max(2, Number(trend.renewals_forecast_amount) / trendMax * 100)
+                  const monthName = monthDisplayDate(trend.month).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' })
+                  return <button className={`admin-chart-month ${selectedMonth === trend.month ? 'admin-chart-month-active' : ''}`} key={trend.month} onClick={() => setSelectedMonth(trend.month)} aria-pressed={selectedMonth === trend.month} aria-label={`${monthName}: split ${money(Number(trend.split_revenue))}, ${trend.renewals_forecast} renovações previstas`}>
+                    <span className="admin-chart-bars"><i style={{ height: `${splitHeight}%` }} /><i style={{ height: `${renewalHeight}%` }} /></span>
+                    <small>{monthName}</small>
+                  </button>
+                })}
+              </div>
+              {selectedTrend && <p className="admin-chart-summary">
+                <b>{monthDisplayDate(selectedTrend.month).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</b>
+                <span>Split: {money(Number(selectedTrend.split_revenue))}</span>
+                <span>Liquidado: {money(Number(selectedTrend.settled_split_revenue))}</span>
+                <span>Renovações previstas: {selectedTrend.renewals_forecast} · {money(Number(selectedTrend.renewals_forecast_amount))}</span>
+              </p>}
+              <p className="admin-disclaimer">Renovações são projeções de assinatura, não pagamentos processados. Esta base não possui histórico financeiro do gateway.</p>
+            </section>
+            <section className="portal-panel">
+              <div className="portal-panel-heading"><div><p className="eyebrow">USO DA PLATAFORMA</p><h2>Consultas de placas</h2></div></div>
+              <div className="plate-analytics-grid">
+                {[
+                  ['Hoje', dashboard.plate_lookups.daily, dashboard.plate_lookups.daily_api],
+                  ['Semana', dashboard.plate_lookups.weekly, dashboard.plate_lookups.weekly_api],
+                  ['Mês', dashboard.plate_lookups.monthly, dashboard.plate_lookups.monthly_api],
+                  ['Ano', dashboard.plate_lookups.yearly, dashboard.plate_lookups.yearly_api],
+                ].map(([label, count, apiCount]) => <div key={label}><small>{label}</small><b>{count}</b><span>{apiCount} via API</span></div>)}
+              </div>
+              <p className="admin-cost-line">API estimada (mês) <b>{money(Number(dashboard.plate_lookups.monthly_api_cost))}</b></p>
+              <p className="admin-cost-line">Taxa estimada de cache (R$ 0,03/consulta) <b>{money(Number(dashboard.plate_lookups.monthly_cache_fee_estimate))}</b></p>
+              <p className="admin-disclaimer">Limites de placas por plano e cobrança efetiva ainda não estão configurados.</p>
+            </section>
+          </div>
+          <section className="admin-analytics-grid admin-operations-grid">
+            <section className="portal-panel">
+              <div className="portal-panel-heading"><div><p className="eyebrow">LOGÍSTICA</p><h2>Rotas e taxas registradas</h2></div></div>
+              <div className="admin-logistics-summary"><div><small>Entregas concluídas no mês</small><b>{monthlyDeliveries}</b></div><div><small>Frete registrado nos pedidos</small><b>{money(monthlyDeliveryFees)}</b></div><div><small>Taxa estimada pelas regras e rotas</small><b>{money(monthlyRouteFees)}</b></div></div>
+              <p className="admin-disclaimer">A estimativa aplica as regras existentes (km grátis e preço por km) às distâncias dos pedidos entregues. Google Maps e custos de chamadas não estão conectados; o cálculo não substitui a cobrança efetiva.</p>
+            </section>
+            <section className="portal-panel">
+              <div className="portal-panel-heading"><div><p className="eyebrow">RECEITAS ADICIONAIS</p><h2>Produtos e NF-e</h2></div></div>
+              <p className="admin-disclaimer">O schema atual não registra vendas de blocos de estoque nem de notas fiscais adicionais. Nenhum valor é contabilizado para evitar receita fictícia ou duplicada.</p>
+            </section>
+          </section>
+        </>}
         <section className="tenant-list">
-          <h2>Lojas cadastradas</h2>
-          {error && <p className="form-message form-error" role="alert">{error}</p>}
-          {tenants.length === 0 && !error ? <p className="auth-description">Nenhuma loja cadastrada.</p> : tenants.map((tenant) => (
-            <div className="tenant-row" key={tenant.id}><div><b>{tenant.name}</b><small>/loja/{tenant.slug}</small></div><span className={`tenant-status status-${tenant.status}`}>{tenant.status}</span></div>
+          <div className="portal-panel-heading"><div><p className="eyebrow">LOJAS E PLANOS</p><h2>Lojas cadastradas</h2></div><button className="auth-button auth-button-primary" onClick={() => setSupportOpen(true)}><MessageCircle size={15} /> Central de suporte</button></div>
+          {!loading && !error && stores.length === 0 ? <p className="auth-description">Nenhuma loja cadastrada.</p> : stores.map((store) => (
+            <details className="tenant-row" key={store.id}>
+              <summary><div><b>{store.name}</b><small>/loja/{store.slug} · {store.plan_name ?? 'Sem plano'}</small></div><span className={`tenant-status status-${store.status}`}>{store.status}</span></summary>
+              <div className="tenant-metrics">
+                <span><small>Vitrine</small><b><a href={`/loja/${store.slug}`} target="_blank" rel="noreferrer">Abrir vitrine</a></b></span>
+                <span><small>Vendas pagas no mês</small><b>{money(Number(store.monthly_paid_sales))}</b></span>
+                <span><small>Pedidos pagos</small><b>{store.monthly_paid_orders}</b></span>
+                <span><small>Entregas concluídas</small><b>{store.monthly_delivered}</b></span>
+                <span><small>Plano / mensalidade</small><b>{store.plan_name ?? '—'} · {store.monthly_price == null ? '—' : `${money(Number(store.monthly_price))}/mês`}</b></span>
+                <span><small>Comissão do plano</small><b>{store.commission_rate == null ? '—' : `${(Number(store.commission_rate) * 100).toLocaleString('pt-BR')}%`}</b></span>
+                <span><small>Split gerado / liquidado</small><b>{money(Number(store.monthly_split_amount))} / {money(Number(store.monthly_split_settled))}</b></span>
+                <span><small>Frete registrado</small><b>{money(Number(store.monthly_delivery_fees))}</b></span>
+                <span><small>Taxa estimada por rota</small><b>{money(Number(store.monthly_route_fee_estimate))}</b></span>
+                <span><small>Distância média registrada</small><b>{store.monthly_average_distance_km == null ? '—' : `${Number(store.monthly_average_distance_km).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km`}</b></span>
+                <span><small>Renovação prevista</small><b>{store.current_period_end ? new Date(store.current_period_end).toLocaleDateString('pt-BR') : '—'} · {store.subscription_status ?? 'sem assinatura'}</b></span>
+              </div>
+            </details>
           ))}
         </section>
       </section>
@@ -478,7 +716,12 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
 }
 
 function StorefrontPage({ slug }: { slug: string }) {
-  const [store, setStore] = useState<{ id: string; name: string } | null>(null)
+  const [store, setStore] = useState<{
+    id: string
+    name: string
+    logo_url: string | null
+    brand: { app_name?: string; primary_color?: string; tagline?: string }
+  } | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
@@ -486,14 +729,14 @@ function StorefrontPage({ slug }: { slug: string }) {
       try {
         const { data, error: queryError } = await requireSupabase().rpc('get_public_tenant', { p_slug: slug })
         if (queryError) throw queryError
-        if (active) setStore((data?.[0] as { id: string; name: string } | undefined) ?? null)
+        if (active) setStore((data?.[0] as typeof store) ?? null)
       } catch (reason) {
         if (active) setError(errorText(reason))
       }
     })()
     return () => { active = false }
   }, [slug])
-  return <main className="auth-page"><section className="auth-card"><Brand /><p className="eyebrow">VITRINE B2C</p>{error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.name}</h1><p className="auth-description">A vitrine será exibida após a configuração do catálogo e das APIs da loja.</p></> : <h1>Carregando vitrine…</h1>}<a className="auth-subtle-link" href="/login">Acesso da loja</a></section></main>
+  return <main className="auth-page"><section className="auth-card storefront-white-label" style={{ '--store-color': store?.brand.primary_color ?? '#718c28' } as React.CSSProperties}>{store?.logo_url && <img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} />}<p className="eyebrow">VITRINE B2C</p>{error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`} O catálogo será exibido após a configuração das APIs da loja.</p></> : <h1>Carregando vitrine…</h1>}<a className="auth-subtle-link" href="/login">Acesso da loja</a></section></main>
 }
 
 function SupportDialog({ user, tenantId, admin = false, onClose }: { user: User; tenantId?: string; admin?: boolean; onClose: () => void }) {

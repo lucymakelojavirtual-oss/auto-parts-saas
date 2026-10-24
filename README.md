@@ -40,6 +40,16 @@ Aplique `20261026000000_plan_commissions.sql` depois das migrações anteriores.
 
 Quando um pedido é marcado como pago pelo backend, o trigger consulta o plano vigente da loja e cria uma linha idempotente em `transactions_split`, calculando a comissão sobre o subtotal dos produtos (sem frete). O split fica `pending` até o provedor de pagamento efetuar a liquidação. Esta base ainda não integra gateway nem transfere valores para a conta Master da Vancely; essa etapa exige uma função server-side com o provedor e os identificadores de conta/split configurados. Não marque pedidos como pagos pelo cliente/navegador.
 
+## Central Vancely e identidade white-label
+
+A migração `20261028000000_master_analytics_branding.sql` reutiliza as tabelas existentes para fornecer o RPC de métricas da Central Vancely, índices para consultas por loja/período, compatibilidade RLS com os perfis `admin_master` e `vancely_admin`, e atualização validada da identidade visual da loja. Aplique-a após as migrações anteriores.
+
+O painel calcula vendas pagas, entregas, fretes, splits por plano e consultas de placas a partir de `orders`, `transactions_split` e `plate_lookup_events`. A taxa de R$ 0,03 por consulta em cache é apresentada como estimativa de faturamento; o custo de API utiliza o campo `simulated_cost` que já existe. Limites de consultas por plano não estão modelados. As renovações no gráfico são previsões baseadas em `current_period_end`, não pagamentos do gateway.
+
+O fluxo de cadastro já cria loja, associação, assinatura e regra de entrega, e as rotas compartilhadas existentes atendem lojista/vendedor (`/app`), motoboy (`/entregador`) e cliente (`/loja/:slug`). A personalização do lojista salva nome, cor, frase e logomarca no bucket `tenant-media` já existente. Não há provisionamento de três instalações PWA independentes nem ícones white-label dinâmicos neste frontend.
+
+Esta base ainda não registra compras de blocos de estoque/NF-e adicionais, custos do Google Maps ou eventos de cobrança e renovação do gateway; o painel não inventa nem duplica essas receitas. A integração desses módulos exige conexão backend e persistência própria antes de exibir valores reais.
+
 ## Integrações pendentes
 
 As telas não fazem chamadas simuladas para emitir notas, consultar placas, cobrar micropagamentos, calcular rotas, criar pedidos ou processar pagamentos. As integrações Focus NFe, API de placas/cache e Google Maps precisam ser implementadas em funções seguras de backend antes de habilitar esses módulos. A vitrine e a área de entregas também aguardam as APIs de catálogo, pedidos, mapas e pagamentos.
