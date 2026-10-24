@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, ChartNoAxesCombined, LifeBuoy, LockKeyhole, MessageCircle, Palette, RefreshCw, Send, Store, Upload, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bike, ChartNoAxesCombined, LifeBuoy, LockKeyhole, MessageCircle, Palette, PanelsTopLeft, RefreshCw, Send, ShoppingCart, Store, Upload, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
 type Plan = {
@@ -151,6 +151,27 @@ async function resolvePortal(user: User): Promise<Portal> {
   }
 }
 
+async function resolveMasterPortal(slug: string): Promise<Portal> {
+  const { data, error } = await requireSupabase().rpc('get_master_tenant_by_slug', { p_slug: slug })
+  if (error) throw error
+  const tenant = (data?.[0] as {
+    id: string
+    name: string
+    slug: string
+    logo_url: string | null
+    brand: Portal['brand']
+  } | undefined)
+  if (!tenant) throw new Error('A loja solicitada não foi encontrada.')
+  return {
+    tenantId: tenant.id,
+    tenantName: tenant.name,
+    slug: tenant.slug,
+    role: 'admin_master',
+    logoUrl: tenant.logo_url,
+    brand: tenant.brand ?? {},
+  }
+}
+
 export default function App() {
   const path = window.location.pathname.replace(/\/+$/, '') || '/'
 
@@ -159,7 +180,8 @@ export default function App() {
   if (path === '/admin/login') return <LoginPage kind="admin" />
   const storefrontMatch = path.match(/^\/loja\/([^/]+)$/)
   if (storefrontMatch) return <StorefrontPage slug={decodeURIComponent(storefrontMatch[1])} />
-  if (path === '/admin' || path === '/app' || path === '/entregador') {
+  const masterStoreViewMatch = path.match(/^\/(app|driver)\/([^/]+)$/)
+  if (path === '/admin' || path === '/app' || path === '/entregador' || masterStoreViewMatch) {
     return <ProtectedPage path={path} />
   }
   return <LandingPage />
@@ -207,7 +229,8 @@ function LoginPage({ kind }: { kind: 'admin' | 'merchant' }) {
           setError('Esta conta não tem perfil de administrador Vancely.')
           return
         }
-        navigate('/admin')
+        const next = new URLSearchParams(window.location.search).get('next')
+        navigate(next && /^\/(?:app|driver)\/[^/]+$/.test(next) ? next : '/admin')
       } else {
         if (isAdminUser(data.user)) {
           navigate('/admin')
@@ -414,10 +437,30 @@ function ProtectedPage({ path }: { path: string }) {
     void (async () => {
       try {
         const client = requireSupabase()
+        const { data: sessionData, error: sessionError } = await client.auth.getSession()
+        if (sessionError) throw sessionError
+        if (!sessionData.session) {
+          const masterStoreView = /^\/(?:app|driver)\/[^/]+$/.test(path)
+          navigate(masterStoreView
+            ? `/admin/login?next=${encodeURIComponent(path)}`
+            : path === '/admin' ? '/admin/login' : '/login')
+          return
+        }
         const { data, error: userError } = await client.auth.getUser()
         if (userError) throw userError
         if (!data.user) {
           navigate(path === '/admin' ? '/admin/login' : '/login')
+          return
+        }
+        const masterViewMatch = path.match(/^\/(app|driver)\/([^/]+)$/)
+        if (masterViewMatch) {
+          if (!isAdminUser(data.user)) {
+            setError('A visualização direta de lojas é restrita ao Admin Master.')
+            return
+          }
+          const currentPortal = await resolveMasterPortal(decodeURIComponent(masterViewMatch[2]))
+          setUser(data.user)
+          setPortal(currentPortal)
           return
         }
         if (path === '/admin') {
@@ -465,23 +508,27 @@ function ProtectedPage({ path }: { path: string }) {
   if (error) return <PageMessage title="Acesso indisponível" message={error} link={path === '/admin' ? '/admin/login' : '/login'} linkText="Ir para login" />
   if (path === '/admin' && user) return <AdminDashboard user={user} onLogout={logout} />
   if (!portal || !user) return <PageMessage title="Acesso indisponível" message="Não encontramos um perfil associado a esta conta." link="/login" linkText="Ir para login" />
-  if (path === '/entregador') return <CourierPortal user={user} portal={portal} onLogout={logout} />
-  return <MerchantPortal user={user} portal={portal} onLogout={logout} />
+  const masterPreview = isAdminUser(user) && /^\/(?:app|driver)\//.test(path)
+  if (path === '/entregador' || path.startsWith('/driver/')) {
+    return <CourierPortal user={user} portal={portal} onLogout={logout} masterPreview={masterPreview} />
+  }
+  return <MerchantPortal user={user} portal={portal} onLogout={logout} masterPreview={masterPreview} />
 }
 
 function PageMessage({ title, message, link, linkText }: { title: string; message?: string; link?: string; linkText?: string }) {
   return <main className="auth-page"><section className="auth-card"><Brand /><h1>{title}</h1>{message && <p className="auth-description">{message}</p>}{link && <a className="auth-button auth-button-primary" href={link}>{linkText ?? 'Continuar'}</a>}</section></main>
 }
 
-function MerchantPortal({ user, portal, onLogout }: { user: User; portal: Portal; onLogout: () => void }) {
+function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { user: User; portal: Portal; onLogout: () => void; masterPreview?: boolean }) {
   const [supportOpen, setSupportOpen] = useState(false)
   return (
     <main className="portal-page">
+      {masterPreview && <MasterViewingBanner tenantName={portal.tenantName} />}
       <PortalHeader user={user} title={portal.tenantName} onLogout={onLogout} />
       <section className="portal-content" style={{ '--store-color': portal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
         <p className="eyebrow">AMBIENTE DA LOJA · {portal.role.toUpperCase()}</p>
         <h1>Bem-vindo à {portal.tenantName}</h1>
-        <p className="auth-description">O acesso está autenticado e isolado para esta loja. Os módulos operacionais serão habilitados conforme as APIs de produção forem conectadas.</p>
+        <p className="auth-description">{masterPreview ? 'Sessão Admin Master com visualização e gestão autorizadas desta loja.' : 'O acesso está autenticado e isolado para esta loja.'} Os módulos operacionais serão habilitados conforme as APIs de produção forem conectadas.</p>
         <div className="portal-cards">
           <article><Store size={20} /><h2>Dados da loja</h2>{portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}<p>Vitrine: <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer">/loja/{portal.slug}</a></p></article>
           <article><LifeBuoy size={20} /><h2>Suporte</h2><p>Triagem inicial e atendimento humano pela central Vancely.</p><button className="auth-button auth-button-secondary" onClick={() => setSupportOpen(true)}>Abrir suporte</button></article>
@@ -490,12 +537,12 @@ function MerchantPortal({ user, portal, onLogout }: { user: User; portal: Portal
         <section className="portal-panel">
           <div className="portal-panel-heading"><div><p className="eyebrow">APLICATIVOS DA LOJA</p><h2>Experiências PWA</h2></div><span>Disponíveis na estrutura atual</span></div>
           <div className="pwa-links">
-            <a href="/app"><Store size={17} /><span><b>Lojista + vendedor</b><small>/app · acesso por perfil</small></span></a>
-            <a href="/entregador"><ArrowRight size={17} /><span><b>Motoboy</b><small>/entregador · requer perfil courier</small></span></a>
+            <a href={masterPreview ? `/app/${encodeURIComponent(portal.slug)}` : '/app'}><Store size={17} /><span><b>Lojista + vendedor</b><small>{masterPreview ? `/app/${portal.slug}` : '/app · acesso por perfil'}</small></span></a>
+            <a href={masterPreview ? `/driver/${encodeURIComponent(portal.slug)}` : '/entregador'}><Bike size={17} /><span><b>Motoboy</b><small>{masterPreview ? `/driver/${portal.slug}` : '/entregador · acesso por perfil'}</small></span></a>
             <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer"><Store size={17} /><span><b>Cliente</b><small>/loja/{portal.slug}</small></span></a>
           </div>
         </section>
-        {['owner', 'admin', 'manager'].includes(portal.role) && <TenantBrandSettings portal={portal} />}
+        {masterPreview || ['owner', 'admin', 'manager'].includes(portal.role) ? <TenantBrandSettings portal={portal} /> : null}
       </section>
       {supportOpen && <SupportDialog user={user} tenantId={portal.tenantId} onClose={() => setSupportOpen(false)} />}
     </main>
@@ -565,23 +612,40 @@ function TenantBrandSettings({ portal }: { portal: Portal }) {
   )
 }
 
-function CourierPortal({ user, portal, onLogout }: { user: User; portal: Portal; onLogout: () => void }) {
+function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user: User; portal: Portal; onLogout: () => void; masterPreview?: boolean }) {
   return (
     <main className="portal-page" style={{ '--store-color': portal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
+      {masterPreview && <MasterViewingBanner tenantName={portal.tenantName} />}
       <PortalHeader user={user} title={`Entregas · ${portal.tenantName}`} onLogout={onLogout} />
       <section className="portal-content">
         <p className="eyebrow">PWA DO ENTREGADOR</p>
         {portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}
         <h1>Olá, {user.user_metadata?.full_name ?? user.email}</h1>
         <p className="auth-description">{portal.brand.tagline || `Você está autenticado como entregador da ${portal.tenantName}.`} Corridas, rotas e carteira serão exibidas quando as APIs de pedidos, mapas e pagamentos estiverem configuradas.</p>
-        <a className="auth-subtle-link" href="/app">Acessar ambiente da loja</a>
+        <a className="auth-subtle-link" href={masterPreview ? `/app/${encodeURIComponent(portal.slug)}` : '/app'}>Acessar ambiente da loja</a>
       </section>
     </main>
   )
 }
 
-function PortalHeader({ user, title, onLogout }: { user: User; title: string; onLogout: () => void }) {
-  return <header className="portal-header"><a href="/"><Brand /></a><span>{title}</span><div><small>{user.email}</small><button className="auth-button auth-button-secondary" onClick={onLogout}>Sair</button></div></header>
+function MasterViewingBanner({ tenantName }: { tenantName: string }) {
+  return <aside className="master-viewing-banner"><span>Você está visualizando a loja <b>{tenantName}</b> como Admin Master.</span><a href="/admin">Voltar à Central Vancely</a></aside>
+}
+
+function PortalHeader({
+  user,
+  title,
+  onLogout,
+  tenantOptions,
+}: {
+  user: User
+  title: string
+  onLogout: () => void
+  tenantOptions?: Pick<MasterStoreMetrics, 'id' | 'name' | 'slug'>[]
+}) {
+  return <header className="portal-header"><a href="/"><Brand /></a><span>{title}</span>{tenantOptions && <label className="master-tenant-select">Visualizar loja<select value="" aria-label="Assumir visão de uma loja" onChange={(event) => {
+    if (event.target.value) navigate(`/app/${encodeURIComponent(event.target.value)}`)
+  }}><option value="">Selecione uma loja…</option>{tenantOptions.map((tenant) => <option key={tenant.id} value={tenant.slug}>{tenant.name}</option>)}</select></label>}<div><small>{user.email}</small><button className="auth-button auth-button-secondary" onClick={onLogout}>Sair</button></div></header>
 }
 
 function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
@@ -622,7 +686,7 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
 
   return (
     <main className="portal-page">
-      <PortalHeader user={user} title="Software Pai Vancely" onLogout={onLogout} />
+      <PortalHeader user={user} title="Software Pai Vancely" onLogout={onLogout} tenantOptions={stores} />
       <section className="portal-content">
         <p className="eyebrow">ADMINISTRAÇÃO SAAS</p>
         <h1>Central Vancely</h1>
@@ -691,10 +755,14 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
         <section className="tenant-list">
           <div className="portal-panel-heading"><div><p className="eyebrow">LOJAS E PLANOS</p><h2>Lojas cadastradas</h2></div><button className="auth-button auth-button-primary" onClick={() => setSupportOpen(true)}><MessageCircle size={15} /> Central de suporte</button></div>
           {!loading && !error && stores.length === 0 ? <p className="auth-description">Nenhuma loja cadastrada.</p> : stores.map((store) => (
-            <details className="tenant-row" key={store.id}>
-              <summary><div><b>{store.name}</b><small>/loja/{store.slug} · {store.plan_name ?? 'Sem plano'}</small></div><span className={`tenant-status status-${store.status}`}>{store.status}</span></summary>
+            <article className="tenant-row" key={store.id}>
+              <div className="tenant-row-heading"><div><b>{store.name}</b><small>/loja/{store.slug} · {store.plan_name ?? 'Sem plano'}</small></div><span className={`tenant-status status-${store.status}`}>{store.status}</span></div>
+              <nav className="tenant-pwa-actions" aria-label={`Aplicativos de ${store.name}`}>
+                <a className="tenant-pwa-action" href={`/loja/${encodeURIComponent(store.slug)}`}><ShoppingCart size={15} /> Vitrine Cliente</a>
+                <a className="tenant-pwa-action" href={`/app/${encodeURIComponent(store.slug)}`}><PanelsTopLeft size={15} /> Painel Lojista</a>
+                <a className="tenant-pwa-action" href={`/driver/${encodeURIComponent(store.slug)}`}><Bike size={15} /> App Motoboy</a>
+              </nav>
               <div className="tenant-metrics">
-                <span><small>Vitrine</small><b><a href={`/loja/${store.slug}`} target="_blank" rel="noreferrer">Abrir vitrine</a></b></span>
                 <span><small>Vendas pagas no mês</small><b>{money(Number(store.monthly_paid_sales))}</b></span>
                 <span><small>Pedidos pagos</small><b>{store.monthly_paid_orders}</b></span>
                 <span><small>Entregas concluídas</small><b>{store.monthly_delivered}</b></span>
@@ -706,7 +774,7 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
                 <span><small>Distância média registrada</small><b>{store.monthly_average_distance_km == null ? '—' : `${Number(store.monthly_average_distance_km).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km`}</b></span>
                 <span><small>Renovação prevista</small><b>{store.current_period_end ? new Date(store.current_period_end).toLocaleDateString('pt-BR') : '—'} · {store.subscription_status ?? 'sem assinatura'}</b></span>
               </div>
-            </details>
+            </article>
           ))}
         </section>
       </section>
@@ -722,21 +790,63 @@ function StorefrontPage({ slug }: { slug: string }) {
     logo_url: string | null
     brand: { app_name?: string; primary_color?: string; tagline?: string }
   } | null>(null)
+  const [products, setProducts] = useState<{ id: string; name: string; description: string | null; price: number; stock: number; image_url: string | null }[]>([])
+  const [masterViewing, setMasterViewing] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
     void (async () => {
       try {
-        const { data, error: queryError } = await requireSupabase().rpc('get_public_tenant', { p_slug: slug })
+        const client = requireSupabase()
+        const { data: sessionData, error: sessionError } = await client.auth.getSession()
+        if (sessionError) throw sessionError
+        let isMaster = false
+        if (sessionData.session) {
+          const { data: userData, error: userError } = await client.auth.getUser()
+          if (userError) throw userError
+          isMaster = userData.user ? isAdminUser(userData.user) : false
+        }
+        const { data, error: queryError } = isMaster
+          ? await client.rpc('get_master_tenant_by_slug', { p_slug: slug })
+          : await client.rpc('get_public_tenant', { p_slug: slug })
         if (queryError) throw queryError
-        if (active) setStore((data?.[0] as typeof store) ?? null)
+        const currentStore = (data?.[0] as typeof store) ?? null
+        if (!active) return
+        setMasterViewing(isMaster)
+        setStore(currentStore)
+        if (currentStore) {
+          const { data: catalog, error: catalogError } = await client.from('products')
+            .select('id, name, description, price, stock, image_url')
+            .eq('tenant_id', currentStore.id)
+            .eq('is_published', true)
+            .order('name')
+          if (catalogError) throw catalogError
+          if (active) setProducts((catalog ?? []) as typeof products)
+        }
       } catch (reason) {
         if (active) setError(errorText(reason))
       }
     })()
     return () => { active = false }
   }, [slug])
-  return <main className="auth-page"><section className="auth-card storefront-white-label" style={{ '--store-color': store?.brand.primary_color ?? '#718c28' } as React.CSSProperties}>{store?.logo_url && <img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} />}<p className="eyebrow">VITRINE B2C</p>{error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`} O catálogo será exibido após a configuração das APIs da loja.</p></> : <h1>Carregando vitrine…</h1>}<a className="auth-subtle-link" href="/login">Acesso da loja</a></section></main>
+  return <main className="storefront-page">
+    {masterViewing && store && <MasterViewingBanner tenantName={store.name} />}
+    <section className="storefront-shell" style={{ '--store-color': store?.brand.primary_color ?? '#718c28' } as React.CSSProperties}>
+      <header className="storefront-heading">
+        {store?.logo_url && <img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} />}
+        <p className="eyebrow">VITRINE B2C</p>
+        {error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></> : <h1>Carregando vitrine…</h1>}
+        <a className="auth-subtle-link" href={masterViewing ? '/admin' : '/login'}>{masterViewing ? 'Voltar à Central Vancely' : 'Acesso da loja'}</a>
+      </header>
+      {store && !error && <section className="storefront-catalog">
+        <div className="portal-panel-heading"><div><p className="eyebrow">CATÁLOGO</p><h2>Produtos disponíveis</h2></div></div>
+        {products.length ? <div className="storefront-products">{products.map((product) => <article key={product.id}>
+          {product.image_url && <img src={product.image_url} alt="" />}
+          <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Consulte disponibilidade'}</small></div>
+        </article>)}</div> : <p className="auth-description">Ainda não há produtos publicados para esta loja.</p>}
+      </section>}
+    </section>
+  </main>
 }
 
 function SupportDialog({ user, tenantId, admin = false, onClose }: { user: User; tenantId?: string; admin?: boolean; onClose: () => void }) {

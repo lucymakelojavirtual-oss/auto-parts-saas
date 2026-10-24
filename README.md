@@ -50,6 +50,12 @@ O fluxo de cadastro já cria loja, associação, assinatura e regra de entrega, 
 
 Esta base ainda não registra compras de blocos de estoque/NF-e adicionais, custos do Google Maps ou eventos de cobrança e renovação do gateway; o painel não inventa nem duplica essas receitas. A integração desses módulos exige conexão backend e persistência própria antes de exibir valores reais.
 
+## Acesso do Admin Master às lojas
+
+Aplique `20261029000000_master_tenant_access.sql` depois da migração de métricas. Ela amplia os helpers RLS já usados pelas políticas de tenant para que a role confiável `admin_master` possa ler e administrar tenants existentes e cria o RPC autenticado `get_master_tenant_by_slug` para abrir uma loja sem trocar a sessão do administrador.
+
+Na Central Vancely, o seletor de lojas e as ações da lista abrem `/app/:slug`, `/driver/:slug` e `/loja/:slug`. As duas primeiras rotas exigem uma sessão com `app_metadata.role` autorizada; a vitrine mantém acesso público apenas a lojas ativas e produtos publicados. Nenhum acesso administrativo é concedido por `user_metadata` ou por e-mail informado pelo navegador: atribua `admin_master` exclusivamente por processo confiável no servidor/Supabase Auth.
+
 ## Integrações pendentes
 
 As telas não fazem chamadas simuladas para emitir notas, consultar placas, cobrar micropagamentos, calcular rotas, criar pedidos ou processar pagamentos. As integrações Focus NFe, API de placas/cache e Google Maps precisam ser implementadas em funções seguras de backend antes de habilitar esses módulos. A vitrine e a área de entregas também aguardam as APIs de catálogo, pedidos, mapas e pagamentos.
