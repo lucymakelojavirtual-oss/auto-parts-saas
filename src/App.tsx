@@ -27,6 +27,10 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado. Tente novamente.'
 }
 
+function isAdminUser(user: User) {
+  return user.app_metadata?.role === 'admin_master' || user.app_metadata?.role === 'vancely_admin'
+}
+
 function navigate(path: string) {
   window.location.assign(path)
 }
@@ -126,13 +130,13 @@ function LoginPage({ kind }: { kind: 'admin' | 'merchant' }) {
       const { data, error: signInError } = await client.auth.signInWithPassword({ email, password })
       if (signInError) throw signInError
       if (isAdmin) {
-        if (data.user.app_metadata?.role !== 'vancely_admin') {
+        if (!isAdminUser(data.user)) {
           setError('Esta conta não tem perfil de administrador Vancely.')
           return
         }
         navigate('/admin')
       } else {
-        if (data.user.app_metadata?.role === 'vancely_admin') {
+        if (isAdminUser(data.user)) {
           navigate('/admin')
           return
         }
@@ -344,14 +348,14 @@ function ProtectedPage({ path }: { path: string }) {
           return
         }
         if (path === '/admin') {
-          if (data.user.app_metadata?.role !== 'vancely_admin') {
+          if (!isAdminUser(data.user)) {
             setError('Acesso restrito à equipe administrativa Vancely.')
             return
           }
           setUser(data.user)
           return
         }
-        if (data.user.app_metadata?.role === 'vancely_admin') {
+        if (isAdminUser(data.user)) {
           navigate('/admin')
           return
         }

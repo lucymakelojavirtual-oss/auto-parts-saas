@@ -17,8 +17,10 @@ Configure `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` com os valores público
 1. Aplique em sequência as migrações de `supabase/migrations/`.
 2. Cadastre e ative no banco os planos **Essencial**, **Aceleração** e **Sede**, com preços e limites aprovados pela Vancely. O formulário de cadastro lista os planos ativos; não há preço comercial fixado nesta base.
 3. Ative a confirmação de e-mail no Supabase Auth para produção e configure os URLs de redirecionamento do projeto para os domínios da aplicação.
-4. Cadastre o perfil Master Admin como `vancely_admin` em `app_metadata` através de um processo administrativo confiável, usando a API Admin do Supabase apenas no servidor. Nunca permita que o navegador atribua esse perfil.
+4. Cadastre o perfil Master Admin como `admin_master` em `app_metadata` através de um processo administrativo confiável, usando a API Admin do Supabase apenas no servidor. Nunca permita que o navegador atribua esse perfil.
 5. Revise juridicamente os termos exibidos no cadastro antes de iniciar a operação comercial.
+
+A migração `20261027000000_setup_admin_master.sql` associa o e-mail Master Admin confirmado ao perfil `admin_master` em `app_metadata`, usado pelas políticas RLS e pelo app. Antes de aplicá-la, crie a conta no Supabase Auth e confirme o e-mail. A migração não cria senha nem grava credenciais; defina uma senha forte e exclusiva pelo fluxo seguro do Supabase Auth. Ela também atribui o perfil a contas futuras desse e-mail apenas depois da confirmação, inclusive se criadas por OAuth.
 
 Rotas disponíveis:
 
