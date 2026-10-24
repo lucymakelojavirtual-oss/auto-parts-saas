@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, Bike, ChartNoAxesCombined, Clock3, LifeBuoy, LockKeyhole, MapPinned, MessageCircle, Package, Palette, PanelsTopLeft, RefreshCw, Send, ShoppingCart, Store, Trash2, Truck, Upload, Wallet, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bike, ChartNoAxesCombined, Clock3, LifeBuoy, LockKeyhole, MapPinned, MessageCircle, Package, Palette, PanelsTopLeft, RefreshCw, Send, ShoppingCart, Store, Trash2, Upload, Wallet, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
 type Plan = {
@@ -20,7 +20,7 @@ type Portal = {
   role: string
   slug: string
   logoUrl: string | null
-  brand: { app_name?: string; primary_color?: string; tagline?: string }
+  brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[] }
 }
 type CatalogProduct = {
   id: string
@@ -99,16 +99,16 @@ function monthDisplayDate(value: string) {
   return new Date(year, month - 1, 15, 12)
 }
 
-function convertImageToWebP(file: File): Promise<Blob> {
+function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88): Promise<Blob> {
   return createImageBitmap(file).then((image) => {
-    const scale = Math.min(1, 800 / image.width)
+    const scale = Math.min(1, maxDimension / Math.max(image.width, image.height))
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(image.width * scale))
     canvas.height = Math.max(1, Math.round(image.height * scale))
     const context = canvas.getContext('2d')
     if (!context) {
       image.close()
-      throw new Error('Não foi possível preparar a imagem da logomarca.')
+      throw new Error('Não foi possível preparar a imagem.')
     }
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
     image.close()
@@ -116,7 +116,7 @@ function convertImageToWebP(file: File): Promise<Blob> {
       canvas.toBlob((blob) => {
         if (blob) resolve(blob)
         else reject(new Error('Não foi possível converter a logomarca para WebP.'))
-      }, 'image/webp', 0.88)
+      }, 'image/webp', quality)
     })
   })
 }
@@ -587,6 +587,9 @@ function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOn
 
   useEffect(() => {
     let active = true
+    setLoading(true)
+    setError('')
+    setNotice('')
     void (async () => {
       try {
         const { data, error: queryError } = await requireSupabase().from('shipping_rules')
@@ -613,8 +616,11 @@ function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOn
     try {
       const freeDistance = Number(freeUntilKm)
       const rate = Number(pricePerKm)
-      if (!Number.isFinite(freeDistance) || freeDistance < 0 || !Number.isFinite(rate) || rate < 0) {
-        throw new Error('Informe valores válidos e não negativos para as regras de frete.')
+      if (!freeUntilKm.trim() || !Number.isFinite(freeDistance) || freeDistance < 0 || freeDistance > 30) {
+        throw new Error('A faixa de entrega grátis deve estar entre 0 e 30 km.')
+      }
+      if (!pricePerKm.trim() || !Number.isFinite(rate) || rate < 0 || rate > 99999.99) {
+        throw new Error('Informe uma taxa válida entre R$ 0,00 e R$ 99.999,99 por km.')
       }
       const { error: saveError } = await requireSupabase().from('shipping_rules').upsert({
         tenant_id: portal.tenantId,
@@ -622,7 +628,7 @@ function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOn
         price_per_km: rate,
       }, { onConflict: 'tenant_id' })
       if (saveError) throw saveError
-      setNotice('Regras de frete atualizadas.')
+      setNotice('Configuração de entrega atualizada.')
     } catch (reason) {
       setError(errorText(reason))
     } finally {
@@ -631,14 +637,45 @@ function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOn
   }
 
   return <section className="portal-panel">
-    <div className="portal-panel-heading"><div><p className="eyebrow">ENTREGAS</p><h2><Truck size={17} /> Configuração de frete</h2></div></div>
-    <form className="brand-settings-form" onSubmit={save}>
-      <label>Frete grátis até (km)<input type="number" min="0" step="0.1" required value={freeUntilKm} onChange={(event) => setFreeUntilKm(event.target.value)} disabled={readOnly || loading} /></label>
-      <label>Taxa por km adicional (R$)<input type="number" min="0" step="0.01" required value={pricePerKm} onChange={(event) => setPricePerKm(event.target.value)} disabled={readOnly || loading} /></label>
+    <div className="portal-panel-heading"><div><p className="eyebrow">ENTREGAS</p><h2><span aria-hidden="true">🛵</span> Configuração de Entrega</h2></div></div>
+    <form className="delivery-settings-form" onSubmit={save}>
+      <div className="delivery-setting">
+        <div className="delivery-setting-heading">
+          <label htmlFor="free-until-km">Entrega grátis até (km)</label>
+          <output htmlFor="free-until-km-range">{Number(freeUntilKm || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km</output>
+        </div>
+        <input
+          id="free-until-km-range"
+          className="delivery-range"
+          type="range"
+          min="0"
+          max="30"
+          step="0.1"
+          value={Math.min(30, Math.max(0, Number(freeUntilKm) || 0))}
+          onChange={(event) => setFreeUntilKm(event.target.value)}
+          aria-label="Ajustar faixa de entrega grátis em quilômetros"
+          disabled={readOnly || loading}
+        />
+        <div className="delivery-range-limits"><span>0 km</span><span>30 km</span></div>
+        <input
+          id="free-until-km"
+          type="number"
+          min="0"
+          max="30"
+          step="0.1"
+          required
+          value={freeUntilKm}
+          onChange={(event) => setFreeUntilKm(event.target.value)}
+          disabled={readOnly || loading}
+        />
+      </div>
+      <label className="delivery-setting">Taxa por km adicional (R$)
+        <span className="delivery-currency-input"><span aria-hidden="true">R$</span><input type="number" min="0" max="99999.99" step="0.01" inputMode="decimal" required value={pricePerKm} onChange={(event) => setPricePerKm(event.target.value)} disabled={readOnly || loading} /></span>
+      </label>
       <p className="image-optimization-note">A cobrança é calculada sobre a distância da rota: km acima da faixa grátis × taxa configurada. A distância precisa vir de um serviço de rotas integrado.</p>
       {error && <p className="form-message form-error" role="alert">{error}</p>}
       {notice && <p className="form-message" role="status">{notice}</p>}
-      {!readOnly && <button className="auth-button auth-button-primary" type="submit" disabled={busy || loading}>{busy ? 'Salvando…' : 'Salvar regras de frete'}</button>}
+      {!readOnly && <button className="auth-button auth-button-primary" type="submit" disabled={busy || loading}>{busy ? 'Salvando…' : 'Salvar configuração'}</button>}
     </form>
   </section>
 }
@@ -826,42 +863,82 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
   const [primaryColor, setPrimaryColor] = useState(portal.brand.primary_color ?? '#293125')
   const [tagline, setTagline] = useState(portal.brand.tagline ?? '')
   const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoUrl, setLogoUrl] = useState(portal.logoUrl)
+  const [banners, setBanners] = useState(portal.brand.promotional_banners ?? [])
+  const [bannerFiles, setBannerFiles] = useState<File[]>([])
+  const [bannerPreviews, setBannerPreviews] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
+  useEffect(() => {
+    const previews = bannerFiles.map((file) => URL.createObjectURL(file))
+    setBannerPreviews(previews)
+    return () => previews.forEach((preview) => URL.revokeObjectURL(preview))
+  }, [bannerFiles])
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (readOnly) return
     setBusy(true)
     setError('')
     setNotice('')
+    const uploadedPaths: string[] = []
     try {
       const client = requireSupabase()
-      let logoUrl = portal.logoUrl
+      let updatedLogoUrl = logoUrl
       if (logoFile) {
         const image = await convertImageToWebP(logoFile)
-        const path = `tenants/${portal.tenantId}/brand/logo.webp`
+        const path = `tenants/${portal.tenantId}/brand/logos/${crypto.randomUUID()}.webp`
         const { error: uploadError } = await client.storage.from('tenant-media').upload(path, image, {
           cacheControl: '3600',
           contentType: 'image/webp',
-          upsert: true,
+          upsert: false,
         })
         if (uploadError) throw uploadError
-        logoUrl = `${client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl}?v=${Date.now()}`
+        uploadedPaths.push(path)
+        updatedLogoUrl = `${client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl}?v=${Date.now()}`
       }
-      if (readOnly) return
-      const { error: updateError } = await client.rpc('update_tenant_brand', {
+      const uploadedBanners: string[] = []
+      for (const [index, file] of bannerFiles.entries()) {
+        const image = await convertImageToWebP(file, 1600, 0.82)
+        if (image.size > 5 * 1024 * 1024) {
+          throw new Error(`A imagem "${file.name}" excede o limite de 5 MB mesmo após a compactação.`)
+        }
+        const path = `tenants/${portal.tenantId}/brand/banners/${crypto.randomUUID()}-${index}.webp`
+        const { error: uploadError } = await client.storage.from('tenant-media').upload(path, image, {
+          cacheControl: '3600',
+          contentType: 'image/webp',
+          upsert: false,
+        })
+        if (uploadError) throw uploadError
+        uploadedPaths.push(path)
+        uploadedBanners.push(client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl)
+      }
+      const updatedBanners = [...banners, ...uploadedBanners]
+      const { error: updateError } = await client.rpc('update_tenant_brand_with_banners', {
         p_tenant_id: portal.tenantId,
         p_app_name: appName.trim(),
         p_primary_color: primaryColor,
         p_tagline: tagline.trim(),
-        p_logo_url: logoUrl,
+        p_logo_url: updatedLogoUrl,
+        p_banners: updatedBanners,
       })
       if (updateError) throw updateError
+      uploadedPaths.length = 0
+      setLogoUrl(updatedLogoUrl)
+      setBanners(updatedBanners)
+      setBannerFiles([])
       setLogoFile(null)
-      setNotice('Identidade visual salva. A vitrine pública já pode usar a logomarca e a cor escolhidas.')
+      setNotice('Alterações salvas. A vitrine e o aplicativo do motoboy já estão atualizados.')
     } catch (reason) {
-      setError(errorText(reason))
+      const saveError = errorText(reason)
+      if (uploadedPaths.length) {
+        const { error: cleanupError } = await requireSupabase().storage.from('tenant-media').remove(uploadedPaths)
+        setError(cleanupError ? `${saveError} Não foi possível remover os arquivos enviados sem salvar: ${cleanupError.message}` : saveError)
+      } else {
+        setError(saveError)
+      }
     } finally {
       setBusy(false)
     }
@@ -871,14 +948,40 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
     <section className="portal-panel">
       <div className="portal-panel-heading"><div><p className="eyebrow">PERSONALIZAÇÃO WHITE-LABEL</p><h2><Palette size={17} /> Aparência dos aplicativos</h2></div></div>
       <form className="brand-settings-form" onSubmit={save}>
-        <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} disabled={readOnly} /></label>
-        <label>Cor principal<input type="color" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} disabled={readOnly} /></label>
-        <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={readOnly} /></label>
-        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={readOnly} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small></label>
+        <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} disabled={readOnly || busy} /></label>
+        <label>Cor principal<input type="color" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} disabled={readOnly || busy} /></label>
+        <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={readOnly || busy} /></label>
+        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={readOnly || busy} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small>{logoUrl && <img className="brand-logo-preview" src={logoUrl} alt={`Logomarca atual de ${portal.tenantName}`} />}</label>
+        <div className="brand-banners">
+          <h3>Banners Promocionais da Vitrine</h3>
+          <p>Adicione até 5 imagens. Elas serão redimensionadas e convertidas para WebP antes do envio.</p>
+          <label>Selecionar banners<input type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={readOnly || busy || banners.length + bannerFiles.length >= 5} onChange={(event) => {
+            const selectedFiles = Array.from(event.currentTarget.files ?? [])
+            event.currentTarget.value = ''
+            const availableSlots = 5 - banners.length - bannerFiles.length
+            if (selectedFiles.length > availableSlots) {
+              setError(`Você pode manter no máximo 5 banners. Ainda há ${availableSlots} vaga(s) disponível(is).`)
+              return
+            }
+            setError('')
+            setBannerFiles((current) => [...current, ...selectedFiles])
+          }} /></label>
+          <div className="brand-banner-grid">
+            {banners.map((url, index) => <figure key={url}>
+              <img src={url} alt={`Banner promocional ${index + 1}`} />
+              {!readOnly && <button type="button" aria-label={`Remover banner ${index + 1}`} disabled={busy} onClick={() => setBanners((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>}
+            </figure>)}
+            {bannerFiles.map((file, index) => <figure key={`${file.name}-${index}`}>
+              <img src={bannerPreviews[index]} alt={`Prévia do banner ${file.name}`} />
+              {!readOnly && <button type="button" aria-label={`Remover arquivo ${file.name}`} disabled={busy} onClick={() => setBannerFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>}
+            </figure>)}
+          </div>
+          <small>{banners.length + bannerFiles.length} de 5 banners selecionados</small>
+        </div>
         {error && <p className="form-message form-error" role="alert">{error}</p>}
-        {notice && <p className="form-message" role="status">{notice}</p>}
-        {!readOnly && <button className="auth-button auth-button-primary" type="submit" disabled={busy}>
-          <Upload size={15} /> {busy ? 'Salvando…' : 'Salvar personalização'}
+        {notice && <p className="form-message brand-save-toast" role="status">{notice}</p>}
+        {!readOnly && <button className="auth-button auth-button-primary brand-save-button" type="submit" disabled={busy}>
+          <Upload size={15} /> {busy ? 'Salvando…' : 'Salvar Alterações'}
         </button>}
       </form>
     </section>
@@ -1061,7 +1164,7 @@ function StorefrontPage({ slug }: { slug: string }) {
     id: string
     name: string
     logo_url: string | null
-    brand: { app_name?: string; primary_color?: string; tagline?: string }
+    brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[] }
   } | null>(null)
   const [products, setProducts] = useState<{ id: string; name: string; description: string | null; price: number; stock: number; image_url: string | null }[]>([])
   const [masterViewing, setMasterViewing] = useState(false)
@@ -1111,6 +1214,7 @@ function StorefrontPage({ slug }: { slug: string }) {
         {error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></> : <h1>Carregando vitrine…</h1>}
         <a className="auth-subtle-link" href={masterViewing ? '/admin' : '/login'}>{masterViewing ? 'Voltar à Central Vancely' : 'Acesso da loja'}</a>
       </header>
+      {store && !error && !!store.brand.promotional_banners?.length && <PromoBannerCarousel banners={store.brand.promotional_banners} />}
       {store && !error && <section className="storefront-catalog">
         <div className="portal-panel-heading"><div><p className="eyebrow">CATÁLOGO</p><h2>Produtos disponíveis</h2></div></div>
         {products.length ? <div className="storefront-products">{products.map((product) => <article key={product.id}>
@@ -1121,6 +1225,19 @@ function StorefrontPage({ slug }: { slug: string }) {
       </section>}
     </section>
   </main>
+}
+
+function PromoBannerCarousel({ banners }: { banners: string[] }) {
+  const [activeIndex, setActiveIndex] = useState(0)
+  const currentIndex = activeIndex % banners.length
+  return <section className="storefront-banner-carousel" aria-label="Ofertas e banners promocionais">
+    <img src={banners[currentIndex]} alt={`Oferta promocional ${currentIndex + 1}`} />
+    {banners.length > 1 && <>
+      <button type="button" aria-label="Banner anterior" onClick={() => setActiveIndex((index) => (index - 1 + banners.length) % banners.length)}><ArrowLeft size={18} /></button>
+      <button type="button" aria-label="Próximo banner" onClick={() => setActiveIndex((index) => (index + 1) % banners.length)}><ArrowRight size={18} /></button>
+      <div className="storefront-banner-dots">{banners.map((_, index) => <button key={index} type="button" aria-label={`Exibir banner ${index + 1}`} aria-current={index === currentIndex} onClick={() => setActiveIndex(index)} />)}</div>
+    </>}
+  </section>
 }
 
 function DeliveryQuotePanel({ tenantId }: { tenantId: string }) {
