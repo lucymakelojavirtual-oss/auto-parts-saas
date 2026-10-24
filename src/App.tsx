@@ -89,6 +89,7 @@ const money = (amount: number) => amount.toLocaleString('pt-BR', { style: 'curre
 const TERMS_VERSION = '2026-10-23-v1'
 const SUPPORT_EMAIL = import.meta.env.VITE_SUPPORT_EMAIL || 'vancelysoftware@gmail.com'
 const SUPPORT_WHATSAPP = import.meta.env.VITE_SUPPORT_WHATSAPP || '5592920021316'
+const BRAND_COLOR_SWATCHES = ['#293125', '#587523', '#718c28', '#2563eb', '#7c3aed', '#db2777', '#ea580c', '#0f766e']
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado. Tente novamente.'
@@ -593,11 +594,11 @@ function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOn
     void (async () => {
       try {
         const { data, error: queryError } = await requireSupabase().from('shipping_rules')
-          .select('free_until_km, price_per_km').eq('tenant_id', portal.tenantId).single()
+          .select('free_until_km, price_per_km').eq('tenant_id', portal.tenantId).maybeSingle()
         if (queryError) throw queryError
         if (active) {
-          setFreeUntilKm(String(data.free_until_km))
-          setPricePerKm(String(data.price_per_km))
+          setFreeUntilKm(String(data?.free_until_km ?? 0))
+          setPricePerKm(String(data?.price_per_km ?? 2.5))
         }
       } catch (reason) {
         if (active) setError(errorText(reason))
@@ -864,6 +865,7 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
   const [tagline, setTagline] = useState(portal.brand.tagline ?? '')
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoUrl, setLogoUrl] = useState(portal.logoUrl)
+  const [logoPreview, setLogoPreview] = useState('')
   const [banners, setBanners] = useState(portal.brand.promotional_banners ?? [])
   const [bannerFiles, setBannerFiles] = useState<File[]>([])
   const [bannerPreviews, setBannerPreviews] = useState<string[]>([])
@@ -877,6 +879,16 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
     return () => previews.forEach((preview) => URL.revokeObjectURL(preview))
   }, [bannerFiles])
 
+  useEffect(() => {
+    if (!logoFile) {
+      setLogoPreview('')
+      return
+    }
+    const preview = URL.createObjectURL(logoFile)
+    setLogoPreview(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [logoFile])
+
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (readOnly) return
@@ -889,6 +901,9 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
       let updatedLogoUrl = logoUrl
       if (logoFile) {
         const image = await convertImageToWebP(logoFile)
+        if (image.size > 5 * 1024 * 1024) {
+          throw new Error('A logomarca excede o limite de 5 MB mesmo após a compactação.')
+        }
         const path = `tenants/${portal.tenantId}/brand/logos/${crypto.randomUUID()}.webp`
         const { error: uploadError } = await client.storage.from('tenant-media').upload(path, image, {
           cacheControl: '3600',
@@ -949,9 +964,24 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
       <div className="portal-panel-heading"><div><p className="eyebrow">PERSONALIZAÇÃO WHITE-LABEL</p><h2><Palette size={17} /> Aparência dos aplicativos</h2></div></div>
       <form className="brand-settings-form" onSubmit={save}>
         <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} disabled={readOnly || busy} /></label>
-        <label>Cor principal<input type="color" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} disabled={readOnly || busy} /></label>
+        <div className="brand-color-field">
+          <span>Cor principal</span>
+          <div className="brand-color-swatches" role="group" aria-label="Paleta de cores predefinidas">
+            {BRAND_COLOR_SWATCHES.map((color) => <button
+              key={color}
+              type="button"
+              className={primaryColor.toLowerCase() === color ? 'brand-color-swatch is-selected' : 'brand-color-swatch'}
+              style={{ '--swatch-color': color } as React.CSSProperties}
+              aria-label={`Selecionar cor ${color}`}
+              aria-pressed={primaryColor.toLowerCase() === color}
+              onClick={() => setPrimaryColor(color)}
+              disabled={readOnly || busy}
+            />)}
+          </div>
+          <label className="brand-hex-input">Código hexadecimal<input type="text" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} pattern="^#[0-9A-Fa-f]{6}$" maxLength={7} placeholder="#293125" aria-label="Código hexadecimal da cor principal" disabled={readOnly || busy} /></label>
+        </div>
         <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={readOnly || busy} /></label>
-        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={readOnly || busy} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small>{logoUrl && <img className="brand-logo-preview" src={logoUrl} alt={`Logomarca atual de ${portal.tenantName}`} />}</label>
+        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={readOnly || busy} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small>{(logoPreview || logoUrl) && <img className="brand-logo-preview" src={logoPreview || logoUrl || ''} alt={`Prévia da logomarca de ${portal.tenantName}`} />}</label>
         <div className="brand-banners">
           <h3>Banners Promocionais da Vitrine</h3>
           <p>Adicione até 5 imagens. Elas serão redimensionadas e convertidas para WebP antes do envio.</p>
