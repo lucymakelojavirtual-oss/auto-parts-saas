@@ -40,11 +40,23 @@ Aplique `20261026000000_plan_commissions.sql` depois das migrações anteriores.
 
 Quando um pedido é marcado como pago pelo backend, o trigger consulta o plano vigente da loja e cria uma linha idempotente em `transactions_split`, calculando a comissão sobre o subtotal dos produtos (sem frete). O split fica `pending` até o provedor de pagamento efetuar a liquidação. Esta base ainda não integra gateway nem transfere valores para a conta Master da Vancely; essa etapa exige uma função server-side com o provedor e os identificadores de conta/split configurados. Não marque pedidos como pagos pelo cliente/navegador.
 
+## Frete, créditos e catálogo
+
+Aplique `20261030000000_delivery_wallet_catalog.sql` depois das migrações anteriores. Ela habilita a configuração de frete grátis por distância e preço por quilômetro excedente, recalcula o frete e o total do pedido no banco e mantém a comissão do Software Pai incidente somente sobre o subtotal, sem comissão sobre frete. A migração `20261031000000_delivery_route_cache.sql` protege o cache de rotas para leitura/escrita apenas pelo servidor e cria a chave única por loja e CEP.
+
+Implante a Edge Function (`supabase functions deploy quote-delivery`) e configure `GOOGLE_MAPS_API_KEY` como secret no Supabase (`supabase secrets set GOOGLE_MAPS_API_KEY=...`). A função consulta `delivery_routes_cache` por `tenant_id` e CEP normalizado antes de chamar a API Directions; em cache miss, usa o CEP de origem da loja e o CEP informado, salva distância em metros e duração em segundos e calcula o preço pelas regras atuais do lojista. O cliente recebe distância, duração, preço e indicador de cache, sem expor a chave do Google Maps. Restrinja a chave no Google Cloud à Directions API e configure limites de uso.
+
+A vitrine permite cotar a entrega por CEP. Ainda não existe fluxo de carrinho/finalização de pedido ou integração de pagamentos nesta base; portanto, a cotação não cria pedido nem liquida/reserva valores no gateway. Quando o pedido existente for criado pelo backend com a distância da rota e marcado como pago, o trigger já registra o split do plano sobre o subtotal (frete excluído).
+
+A mesma migração adiciona saldo cumulativo de créditos avulsos de placas e créditos adicionais de NF-e vinculados ao ciclo atual da assinatura. `monthly_plate_limit` é a cota mensal configurável de placas do plano (inicia em zero para não inventar limites comerciais). A cota mensal do plano e o uso de NF-e são renovados pelo período da assinatura existente; os créditos adicionais de NF-e são zerados quando esse período muda. Consultas de placas consomem primeiro a cota mensal e depois o saldo adicional persistente. O RPC `grant_tenant_credits` só pode ser chamado com `service_role`, após confirmação de pagamento server-side, e usa referência de pagamento idempotente. O frontend mostra as cotas e saldos, mas não inicia compras PIX porque esta aplicação ainda não integra um gateway.
+
+O painel `/app` agora oferece cadastro, edição e exclusão de produtos para lojistas; vendedores (`staff`) podem cadastrar e editar, mas não excluir nem alterar configurações da loja. As regras equivalentes são aplicadas por RLS. Fotos de produtos e logomarcas são reduzidas para no máximo 800 px de largura e convertidas para WebP antes do upload ao bucket `tenant-media`.
+
 ## Central Vancely e identidade white-label
 
 A migração `20261028000000_master_analytics_branding.sql` reutiliza as tabelas existentes para fornecer o RPC de métricas da Central Vancely, índices para consultas por loja/período, compatibilidade RLS com os perfis `admin_master` e `vancely_admin`, e atualização validada da identidade visual da loja. Aplique-a após as migrações anteriores.
 
-O painel calcula vendas pagas, entregas, fretes, splits por plano e consultas de placas a partir de `orders`, `transactions_split` e `plate_lookup_events`. A taxa de R$ 0,03 por consulta em cache é apresentada como estimativa de faturamento; o custo de API utiliza o campo `simulated_cost` que já existe. Limites de consultas por plano não estão modelados. As renovações no gráfico são previsões baseadas em `current_period_end`, não pagamentos do gateway.
+O painel calcula vendas pagas, entregas, fretes, splits por plano e consultas de placas a partir de `orders`, `transactions_split` e `plate_lookup_events`. A taxa de R$ 0,03 por consulta em cache é apresentada como estimativa de faturamento; o custo de API utiliza o campo `simulated_cost` que já existe. As cotas de placas agora são configuradas por `plans.monthly_plate_limit`. As renovações no gráfico são previsões baseadas em `current_period_end`, não pagamentos do gateway.
 
 O fluxo de cadastro já cria loja, associação, assinatura e regra de entrega, e as rotas compartilhadas existentes atendem lojista/vendedor (`/app`), motoboy (`/entregador`) e cliente (`/loja/:slug`). A personalização do lojista salva nome, cor, frase e logomarca no bucket `tenant-media` já existente. Não há provisionamento de três instalações PWA independentes nem ícones white-label dinâmicos neste frontend.
 
@@ -58,7 +70,7 @@ Na Central Vancely, o seletor de lojas e as ações da lista abrem `/app/:slug`,
 
 ## Integrações pendentes
 
-As telas não fazem chamadas simuladas para emitir notas, consultar placas, cobrar micropagamentos, calcular rotas, criar pedidos ou processar pagamentos. As integrações Focus NFe, API de placas/cache e Google Maps precisam ser implementadas em funções seguras de backend antes de habilitar esses módulos. A vitrine e a área de entregas também aguardam as APIs de catálogo, pedidos, mapas e pagamentos.
+As integrações Focus NFe, API de placas/cache e pagamentos ainda dependem de backend. A cotação de rota da vitrine usa a Edge Function `quote-delivery` e a tabela `delivery_routes_cache`; criação de pedidos e processamento de pagamentos continuam pendentes.
 
 ## Verificação
 

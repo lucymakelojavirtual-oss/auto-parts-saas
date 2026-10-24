@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, Bike, ChartNoAxesCombined, LifeBuoy, LockKeyhole, MessageCircle, Palette, PanelsTopLeft, RefreshCw, Send, ShoppingCart, Store, Upload, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bike, ChartNoAxesCombined, Clock3, LifeBuoy, LockKeyhole, MapPinned, MessageCircle, Package, Palette, PanelsTopLeft, RefreshCw, Send, ShoppingCart, Store, Trash2, Truck, Upload, Wallet, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
 type Plan = {
@@ -21,6 +21,29 @@ type Portal = {
   slug: string
   logoUrl: string | null
   brand: { app_name?: string; primary_color?: string; tagline?: string }
+}
+type CatalogProduct = {
+  id: string
+  sku: string
+  name: string
+  description: string | null
+  price: number
+  stock: number
+  image_url: string | null
+  is_published: boolean
+}
+type TenantCreditStatus = {
+  period_start: string
+  period_end: string
+  plates: { monthly_limit: number; monthly_used: number; addon_balance: number }
+  nfe: { monthly_limit: number; monthly_used: number; addon_balance: number }
+}
+type DeliveryQuote = {
+  distance_meters: number
+  duration_seconds: number
+  distance_km: number
+  shipping_amount: number
+  cache_hit: boolean
 }
 type Conversation = { id: string; tenant_id: string; subject: string; status: string; created_at: string }
 type SupportMessage = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string }
@@ -76,9 +99,9 @@ function monthDisplayDate(value: string) {
   return new Date(year, month - 1, 15, 12)
 }
 
-function convertLogoToWebP(file: File): Promise<Blob> {
+function convertImageToWebP(file: File): Promise<Blob> {
   return createImageBitmap(file).then((image) => {
-    const scale = Math.min(1, 512 / Math.max(image.width, image.height))
+    const scale = Math.min(1, 800 / image.width)
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(image.width * scale))
     canvas.height = Math.max(1, Math.round(image.height * scale))
@@ -521,6 +544,8 @@ function PageMessage({ title, message, link, linkText }: { title: string; messag
 
 function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { user: User; portal: Portal; onLogout: () => void; masterPreview?: boolean }) {
   const [supportOpen, setSupportOpen] = useState(false)
+  const isStoreTeam = portal.role !== 'courier'
+  const canManageSettings = masterPreview || ['owner', 'admin', 'manager'].includes(portal.role)
   return (
     <main className="portal-page">
       {masterPreview && <MasterViewingBanner tenantName={portal.tenantName} />}
@@ -528,7 +553,7 @@ function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { use
       <section className="portal-content" style={{ '--store-color': portal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
         <p className="eyebrow">AMBIENTE DA LOJA · {portal.role.toUpperCase()}</p>
         <h1>Bem-vindo à {portal.tenantName}</h1>
-        <p className="auth-description">{masterPreview ? 'Sessão Admin Master com visualização e gestão autorizadas desta loja.' : 'O acesso está autenticado e isolado para esta loja.'} Os módulos operacionais serão habilitados conforme as APIs de produção forem conectadas.</p>
+        <p className="auth-description">{masterPreview ? 'Sessão Admin Master com visualização e gestão autorizadas desta loja.' : 'O acesso está autenticado e isolado para esta loja.'} Catálogo, frete e saldos são exibidos conforme seu perfil; integrações operacionais dependem das APIs de produção.</p>
         <div className="portal-cards">
           <article><Store size={20} /><h2>Dados da loja</h2>{portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}<p>Vitrine: <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer">/loja/{portal.slug}</a></p></article>
           <article><LifeBuoy size={20} /><h2>Suporte</h2><p>Triagem inicial e atendimento humano pela central Vancely.</p><button className="auth-button auth-button-secondary" onClick={() => setSupportOpen(true)}>Abrir suporte</button></article>
@@ -542,14 +567,261 @@ function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { use
             <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer"><Store size={17} /><span><b>Cliente</b><small>/loja/{portal.slug}</small></span></a>
           </div>
         </section>
-        {masterPreview || ['owner', 'admin', 'manager'].includes(portal.role) ? <TenantBrandSettings portal={portal} /> : null}
+        {isStoreTeam && !masterPreview && <ProductCatalogManager portal={portal} role={portal.role} />}
+        {isStoreTeam && !masterPreview && <TenantCreditPanel portal={portal} />}
+        {canManageSettings && <ShippingSettings portal={portal} readOnly={masterPreview} />}
+        {canManageSettings && <TenantBrandSettings portal={portal} readOnly={masterPreview} />}
       </section>
       {supportOpen && <SupportDialog user={user} tenantId={portal.tenantId} onClose={() => setSupportOpen(false)} />}
     </main>
   )
 }
 
-function TenantBrandSettings({ portal }: { portal: Portal }) {
+function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOnly?: boolean }) {
+  const [freeUntilKm, setFreeUntilKm] = useState('0')
+  const [pricePerKm, setPricePerKm] = useState('2.50')
+  const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const { data, error: queryError } = await requireSupabase().from('shipping_rules')
+          .select('free_until_km, price_per_km').eq('tenant_id', portal.tenantId).single()
+        if (queryError) throw queryError
+        if (active) {
+          setFreeUntilKm(String(data.free_until_km))
+          setPricePerKm(String(data.price_per_km))
+        }
+      } catch (reason) {
+        if (active) setError(errorText(reason))
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [portal.tenantId])
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const freeDistance = Number(freeUntilKm)
+      const rate = Number(pricePerKm)
+      if (!Number.isFinite(freeDistance) || freeDistance < 0 || !Number.isFinite(rate) || rate < 0) {
+        throw new Error('Informe valores válidos e não negativos para as regras de frete.')
+      }
+      const { error: saveError } = await requireSupabase().from('shipping_rules').upsert({
+        tenant_id: portal.tenantId,
+        free_until_km: freeDistance,
+        price_per_km: rate,
+      }, { onConflict: 'tenant_id' })
+      if (saveError) throw saveError
+      setNotice('Regras de frete atualizadas.')
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="portal-panel">
+    <div className="portal-panel-heading"><div><p className="eyebrow">ENTREGAS</p><h2><Truck size={17} /> Configuração de frete</h2></div></div>
+    <form className="brand-settings-form" onSubmit={save}>
+      <label>Frete grátis até (km)<input type="number" min="0" step="0.1" required value={freeUntilKm} onChange={(event) => setFreeUntilKm(event.target.value)} disabled={readOnly || loading} /></label>
+      <label>Taxa por km adicional (R$)<input type="number" min="0" step="0.01" required value={pricePerKm} onChange={(event) => setPricePerKm(event.target.value)} disabled={readOnly || loading} /></label>
+      <p className="image-optimization-note">A cobrança é calculada sobre a distância da rota: km acima da faixa grátis × taxa configurada. A distância precisa vir de um serviço de rotas integrado.</p>
+      {error && <p className="form-message form-error" role="alert">{error}</p>}
+      {notice && <p className="form-message" role="status">{notice}</p>}
+      {!readOnly && <button className="auth-button auth-button-primary" type="submit" disabled={busy || loading}>{busy ? 'Salvando…' : 'Salvar regras de frete'}</button>}
+    </form>
+  </section>
+}
+
+function TenantCreditPanel({ portal }: { portal: Portal }) {
+  const [status, setStatus] = useState<TenantCreditStatus | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const { data, error: statusError } = await requireSupabase().rpc('tenant_credit_status', { p_tenant_id: portal.tenantId })
+        if (statusError) throw statusError
+        if (active) setStatus(data as TenantCreditStatus)
+      } catch (reason) {
+        if (active) setError(errorText(reason))
+      }
+    })()
+    return () => { active = false }
+  }, [portal.tenantId])
+
+  return <section className="portal-panel">
+    <div className="portal-panel-heading"><div><p className="eyebrow">CONSUMO DO PLANO</p><h2><Wallet size={17} /> Consultas e notas fiscais</h2></div></div>
+    {error ? <p className="form-message form-error" role="alert">{error}</p> : status ? <>
+      <p className="image-optimization-note">Ciclo atual até {new Date(status.period_end).toLocaleDateString('pt-BR')}. Créditos adicionais de placas são cumulativos; adicionais de NF-e expiram ao fim deste ciclo.</p>
+      <div className="credit-summary">
+        <article><b>Consultas de placas</b><span>{status.plates.monthly_used} / {status.plates.monthly_limit} da cota mensal</span><small>{status.plates.addon_balance} crédito(s) adicional(is), sem expiração</small></article>
+        <article><b>Notas fiscais</b><span>{status.nfe.monthly_used} / {status.nfe.monthly_limit} da cota mensal</span><small>{status.nfe.addon_balance} crédito(s) adicional(is) neste ciclo</small></article>
+      </div>
+    </> : <p className="auth-description">Carregando saldos…</p>}
+  </section>
+}
+
+function ProductCatalogManager({ portal, role }: { portal: Portal; role: string }) {
+  const canDelete = ['owner', 'admin', 'manager'].includes(role)
+  const [products, setProducts] = useState<CatalogProduct[]>([])
+  const [editingId, setEditingId] = useState('')
+  const [sku, setSku] = useState('')
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [price, setPrice] = useState('')
+  const [stock, setStock] = useState('0')
+  const [published, setPublished] = useState(false)
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  async function loadProducts() {
+    const { data, error: loadError } = await requireSupabase().from('products')
+      .select('id, sku, name, description, price, stock, image_url, is_published')
+      .eq('tenant_id', portal.tenantId).order('name')
+    if (loadError) throw loadError
+    setProducts((data ?? []) as CatalogProduct[])
+  }
+
+  useEffect(() => {
+    let active = true
+    void loadProducts().catch((reason) => { if (active) setError(errorText(reason)) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [portal.tenantId])
+
+  function editProduct(product: CatalogProduct) {
+    setEditingId(product.id)
+    setSku(product.sku)
+    setName(product.name)
+    setDescription(product.description ?? '')
+    setPrice(String(product.price))
+    setStock(String(product.stock))
+    setPublished(product.is_published)
+    setImageFile(null)
+    setNotice('')
+    setError('')
+  }
+
+  function clearForm() {
+    setEditingId('')
+    setSku('')
+    setName('')
+    setDescription('')
+    setPrice('')
+    setStock('0')
+    setPublished(false)
+    setImageFile(null)
+  }
+
+  async function saveProduct(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const client = requireSupabase()
+      const productId = editingId || crypto.randomUUID()
+      const productValues = {
+        tenant_id: portal.tenantId,
+        sku: sku.trim(),
+        name: name.trim(),
+        description: description.trim() || null,
+        price: Number(price),
+        stock: Number(stock),
+        is_published: published,
+      }
+      const saveResult = editingId
+        ? await client.from('products').update(productValues).eq('id', productId).eq('tenant_id', portal.tenantId)
+        : await client.from('products').insert({ ...productValues, id: productId })
+      if (saveResult.error) throw saveResult.error
+      if (imageFile) {
+        const image = await convertImageToWebP(imageFile)
+        const path = `tenants/${portal.tenantId}/products/${productId}.webp`
+        const { error: uploadError } = await client.storage.from('tenant-media').upload(path, image, {
+          cacheControl: '3600',
+          contentType: 'image/webp',
+          upsert: true,
+        })
+        if (uploadError) throw uploadError
+        const imageUrl = `${client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl}?v=${Date.now()}`
+        const { error: imageUpdateError } = await client.from('products')
+          .update({ image_url: imageUrl }).eq('id', productId).eq('tenant_id', portal.tenantId)
+        if (imageUpdateError) throw imageUpdateError
+      }
+      await loadProducts()
+      clearForm()
+      setNotice('Produto salvo com sucesso.')
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteProduct(product: CatalogProduct) {
+    if (!window.confirm(`Excluir o produto "${product.name}"?`)) return
+    setError('')
+    setNotice('')
+    try {
+      const { error: deleteError } = await requireSupabase().from('products')
+        .delete().eq('id', product.id).eq('tenant_id', portal.tenantId)
+      if (deleteError) throw deleteError
+      setProducts((current) => current.filter((item) => item.id !== product.id))
+      if (editingId === product.id) clearForm()
+      setNotice('Produto excluído.')
+    } catch (reason) {
+      setError(errorText(reason))
+    }
+  }
+
+  return <section className="portal-panel">
+    <div className="portal-panel-heading"><div><p className="eyebrow">CATÁLOGO</p><h2><Package size={17} /> Produtos e peças</h2></div><span>{canDelete ? 'Acesso total' : 'Edição sem exclusão/configurações'}</span></div>
+    <form className="product-editor-form" onSubmit={saveProduct}>
+      <div className="auth-form-row">
+        <label>SKU<input required maxLength={80} value={sku} onChange={(event) => setSku(event.target.value)} /></label>
+        <label>Nome da peça<input required maxLength={160} value={name} onChange={(event) => setName(event.target.value)} /></label>
+      </div>
+      <label>Descrição<textarea maxLength={2000} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      <div className="auth-form-row">
+        <label>Preço (R$)<input type="number" min="0" step="0.01" required value={price} onChange={(event) => setPrice(event.target.value)} /></label>
+        <label>Estoque<input type="number" min="0" step="1" required value={stock} onChange={(event) => setStock(event.target.value)} /></label>
+      </div>
+      <label className="auth-checkbox"><input type="checkbox" checked={published} onChange={(event) => setPublished(event.target.checked)} /> Publicar na vitrine</label>
+      <label>Foto da peça (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /><small>{imageFile?.name ?? 'A imagem será redimensionada e convertida para WebP antes do envio.'}</small></label>
+      {error && <p className="form-message form-error" role="alert">{error}</p>}
+      {notice && <p className="form-message" role="status">{notice}</p>}
+      <div className="product-form-actions">
+        <button className="auth-button auth-button-primary" type="submit" disabled={busy}>{busy ? 'Salvando…' : editingId ? 'Atualizar produto' : 'Cadastrar produto'}</button>
+        {editingId && <button className="auth-button auth-button-secondary" type="button" onClick={clearForm} disabled={busy}>Cancelar edição</button>}
+      </div>
+    </form>
+    <div className="product-admin-list">
+      {loading ? <p className="auth-description">Carregando produtos…</p> : products.length ? products.map((product) => <article key={product.id}>
+        {product.image_url ? <img src={product.image_url} alt="" /> : <Package size={20} />}
+        <div><b>{product.name}</b><small>{product.sku} · {money(Number(product.price))} · estoque {product.stock} · {product.is_published ? 'publicado' : 'rascunho'}</small></div>
+        <button className="auth-button auth-button-secondary" type="button" onClick={() => editProduct(product)}>Editar</button>
+        {canDelete && <button className="product-delete-button" type="button" aria-label={`Excluir ${product.name}`} onClick={() => void deleteProduct(product)}><Trash2 size={16} /></button>}
+      </article>) : <p className="auth-description">Nenhum produto cadastrado.</p>}
+    </div>
+  </section>
+}
+
+function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; readOnly?: boolean }) {
   const [appName, setAppName] = useState(portal.brand.app_name ?? portal.tenantName)
   const [primaryColor, setPrimaryColor] = useState(portal.brand.primary_color ?? '#293125')
   const [tagline, setTagline] = useState(portal.brand.tagline ?? '')
@@ -567,7 +839,7 @@ function TenantBrandSettings({ portal }: { portal: Portal }) {
       const client = requireSupabase()
       let logoUrl = portal.logoUrl
       if (logoFile) {
-        const image = await convertLogoToWebP(logoFile)
+        const image = await convertImageToWebP(logoFile)
         const path = `tenants/${portal.tenantId}/brand/logo.webp`
         const { error: uploadError } = await client.storage.from('tenant-media').upload(path, image, {
           cacheControl: '3600',
@@ -577,6 +849,7 @@ function TenantBrandSettings({ portal }: { portal: Portal }) {
         if (uploadError) throw uploadError
         logoUrl = `${client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl}?v=${Date.now()}`
       }
+      if (readOnly) return
       const { error: updateError } = await client.rpc('update_tenant_brand', {
         p_tenant_id: portal.tenantId,
         p_app_name: appName.trim(),
@@ -598,15 +871,15 @@ function TenantBrandSettings({ portal }: { portal: Portal }) {
     <section className="portal-panel">
       <div className="portal-panel-heading"><div><p className="eyebrow">PERSONALIZAÇÃO WHITE-LABEL</p><h2><Palette size={17} /> Aparência dos aplicativos</h2></div></div>
       <form className="brand-settings-form" onSubmit={save}>
-        <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} /></label>
-        <label>Cor principal<input type="color" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} /></label>
-        <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" /></label>
-        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP antes do envio.'}</small></label>
+        <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} disabled={readOnly} /></label>
+        <label>Cor principal<input type="color" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} disabled={readOnly} /></label>
+        <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={readOnly} /></label>
+        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={readOnly} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small></label>
         {error && <p className="form-message form-error" role="alert">{error}</p>}
         {notice && <p className="form-message" role="status">{notice}</p>}
-        <button className="auth-button auth-button-primary" type="submit" disabled={busy}>
+        {!readOnly && <button className="auth-button auth-button-primary" type="submit" disabled={busy}>
           <Upload size={15} /> {busy ? 'Salvando…' : 'Salvar personalização'}
-        </button>
+        </button>}
       </form>
     </section>
   )
@@ -844,9 +1117,78 @@ function StorefrontPage({ slug }: { slug: string }) {
           {product.image_url && <img src={product.image_url} alt="" />}
           <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Consulte disponibilidade'}</small></div>
         </article>)}</div> : <p className="auth-description">Ainda não há produtos publicados para esta loja.</p>}
+        <DeliveryQuotePanel tenantId={store.id} />
       </section>}
     </section>
   </main>
+}
+
+function DeliveryQuotePanel({ tenantId }: { tenantId: string }) {
+  const [cep, setCep] = useState('')
+  const [quote, setQuote] = useState<DeliveryQuote | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function calculate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setQuote(null)
+    try {
+      const destinationCep = cep.replace(/\D/g, '')
+      if (destinationCep.length !== 8) {
+        throw new Error('Informe um CEP de destino válido com 8 dígitos.')
+      }
+      const { data, error: quoteError } = await requireSupabase().functions.invoke('quote-delivery', {
+        body: { tenant_id: tenantId, destination_cep: destinationCep },
+      })
+      if (quoteError) {
+        if (quoteError.context instanceof Response) {
+          const responseBody = await quoteError.context.clone().json().catch(() => null)
+          if (typeof responseBody?.error === 'string') throw new Error(responseBody.error)
+        }
+        throw quoteError
+      }
+      if (!data || typeof data.shipping_amount !== 'number') {
+        throw new Error('O serviço de rotas retornou uma cotação inválida.')
+      }
+      setQuote(data as DeliveryQuote)
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="delivery-quote-panel" aria-labelledby="delivery-quote-title">
+    <div><p className="eyebrow">ENTREGA</p><h3 id="delivery-quote-title"><MapPinned size={17} /> Calcular frete para o seu CEP</h3></div>
+    <form onSubmit={calculate}>
+      <label htmlFor="delivery-destination-cep">CEP de destino</label>
+      <div className="delivery-quote-input">
+        <input
+          id="delivery-destination-cep"
+          inputMode="numeric"
+          autoComplete="postal-code"
+          maxLength={9}
+          pattern="[0-9]{5}-?[0-9]{3}"
+          placeholder="00000-000"
+          required
+          value={cep}
+          onChange={(event) => setCep(event.target.value.replace(/[^\d-]/g, '').slice(0, 9))}
+        />
+        <button className="auth-button auth-button-primary" type="submit" disabled={busy}>
+          {busy ? 'Calculando…' : 'Calcular entrega'}
+        </button>
+      </div>
+    </form>
+    {error && <p className="form-message form-error" role="alert">{error}</p>}
+    {quote && <div className="delivery-quote-result" role="status">
+      <b>{quote.shipping_amount === 0 ? 'Frete grátis' : money(quote.shipping_amount)}</b>
+      <span>{quote.distance_km.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km</span>
+      <span><Clock3 size={14} /> {Math.ceil(quote.duration_seconds / 60)} min estimados</span>
+      <small>{quote.cache_hit ? 'Rota obtida do cache, sem nova chamada ao Google Maps.' : 'Rota calculada pelo Google Maps e salva no cache.'}</small>
+    </div>}
+  </section>
 }
 
 function SupportDialog({ user, tenantId, admin = false, onClose }: { user: User; tenantId?: string; admin?: boolean; onClose: () => void }) {
