@@ -807,6 +807,8 @@ td:first-child > small { display: block; margin-top: 4px; color: #999e95; font-s
 .delivery-quote-result > b { color: #4e652a; font-size: 16px; }
 .delivery-quote-result > span { display: inline-flex; align-items: center; gap: 5px; }
 .delivery-quote-result > small { flex-basis: 100%; color: #858b82; font-size: 9px; }
+.route-map { width: 100%; height: 320px; border: 1px solid #e1e6da; border-radius: 6px; background: #eef1e9; }
+.route-map-loading { display: grid; place-items: center; color: #7c8377; font-size: 11px; }
 
 @media (max-width: 700px) {
   .auth-card { padding: 25px 20px; }
@@ -818,6 +820,7 @@ td:first-child > small { display: block; margin-top: 4px; color: #999e95; font-s
   .portal-header .auth-button { min-height: 36px; padding: 0 10px; }
   .master-tenant-select { flex: 1; justify-content: flex-end; }
   .master-tenant-select select { max-width: 180px; min-width: 0; }
+  .route-map { height: 260px; }
   .master-viewing-banner { padding: 8px 12px; }
   .portal-content { width: min(100% - 28px, 1180px); padding: 32px 0; }
   .portal-cards { grid-template-columns: 1fr; gap: 10px; margin: 20px 0; }

@@ -1,7 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { ArrowLeft, ArrowRight, Bike, ChartNoAxesCombined, Clock3, LifeBuoy, LockKeyhole, MapPinned, MessageCircle, Package, Palette, PanelsTopLeft, RefreshCw, Send, ShoppingCart, Store, Trash2, Upload, Wallet, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
+
+const RouteMap = lazy(() => import('./components/RouteMap'))
 
 type Plan = {
   id: string
@@ -42,6 +44,7 @@ type DeliveryQuote = {
   distance_meters: number
   duration_seconds: number
   distance_km: number
+  geometry: { type: 'LineString'; coordinates: [number, number][] }
   shipping_amount: number
   cache_hit: boolean
 }
@@ -1027,7 +1030,7 @@ function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user
         <p className="eyebrow">PWA DO ENTREGADOR</p>
         {portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}
         <h1>Olá, {user.user_metadata?.full_name ?? user.email}</h1>
-        <p className="auth-description">{portal.brand.tagline || `Você está autenticado como entregador da ${portal.tenantName}.`} Corridas, rotas e carteira serão exibidas quando as APIs de pedidos, mapas e pagamentos estiverem configuradas.</p>
+        <p className="auth-description">{portal.brand.tagline || `Você está autenticado como entregador da ${portal.tenantName}.`} Corridas e carteira serão exibidas quando a integração de pedidos e entregas estiver disponível.</p>
         <a className="auth-subtle-link" href={masterPreview ? `/app/${encodeURIComponent(portal.slug)}` : '/app'}>Acessar ambiente da loja</a>
       </section>
     </main>
@@ -1150,7 +1153,7 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
             <section className="portal-panel">
               <div className="portal-panel-heading"><div><p className="eyebrow">LOGÍSTICA</p><h2>Rotas e taxas registradas</h2></div></div>
               <div className="admin-logistics-summary"><div><small>Entregas concluídas no mês</small><b>{monthlyDeliveries}</b></div><div><small>Frete registrado nos pedidos</small><b>{money(monthlyDeliveryFees)}</b></div><div><small>Taxa estimada pelas regras e rotas</small><b>{money(monthlyRouteFees)}</b></div></div>
-              <p className="admin-disclaimer">A estimativa aplica as regras existentes (km grátis e preço por km) às distâncias dos pedidos entregues. Google Maps e custos de chamadas não estão conectados; o cálculo não substitui a cobrança efetiva.</p>
+              <p className="admin-disclaimer">A estimativa aplica as regras existentes (km grátis e preço por km) às distâncias dos pedidos entregues. Custos de chamadas de geocodificação e roteirização não são contabilizados; o cálculo não substitui a cobrança efetiva.</p>
             </section>
             <section className="portal-panel">
               <div className="portal-panel-heading"><div><p className="eyebrow">RECEITAS ADICIONAIS</p><h2>Produtos e NF-e</h2></div></div>
@@ -1296,7 +1299,8 @@ function DeliveryQuotePanel({ tenantId }: { tenantId: string }) {
         }
         throw quoteError
       }
-      if (!data || typeof data.shipping_amount !== 'number') {
+      if (!data || typeof data.shipping_amount !== 'number'
+        || data.geometry?.type !== 'LineString' || !Array.isArray(data.geometry.coordinates)) {
         throw new Error('O serviço de rotas retornou uma cotação inválida.')
       }
       setQuote(data as DeliveryQuote)
@@ -1333,7 +1337,10 @@ function DeliveryQuotePanel({ tenantId }: { tenantId: string }) {
       <b>{quote.shipping_amount === 0 ? 'Frete grátis' : money(quote.shipping_amount)}</b>
       <span>{quote.distance_km.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km</span>
       <span><Clock3 size={14} /> {Math.ceil(quote.duration_seconds / 60)} min estimados</span>
-      <small>{quote.cache_hit ? 'Rota obtida do cache, sem nova chamada ao Google Maps.' : 'Rota calculada pelo Google Maps e salva no cache.'}</small>
+      <small>{quote.cache_hit ? 'Rota obtida do cache local.' : 'Rota calculada com OSRM e salva no cache local.'}</small>
+      <Suspense fallback={<div className="route-map route-map-loading">Carregando mapa…</div>}>
+        <RouteMap geometry={quote.geometry} />
+      </Suspense>
     </div>}
   </section>
 }
