@@ -107,7 +107,11 @@ Deno.serve(async (request) => {
     }
 
     const body = await request.json()
-    const tenantId = typeof body.tenant_id === 'string' ? body.tenant_id : ''
+    const tenantId = typeof body.store_id === 'string'
+      ? body.store_id
+      : typeof body.tenant_id === 'string'
+        ? body.tenant_id
+        : ''
     const destinationCep = typeof body.destination_cep === 'string'
       ? body.destination_cep.replace(/\D/g, '')
       : ''

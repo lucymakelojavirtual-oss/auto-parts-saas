@@ -1254,7 +1254,7 @@ function StorefrontPage({ slug }: { slug: string }) {
           {product.image_url && <img src={product.image_url} alt="" />}
           <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Consulte disponibilidade'}</small></div>
         </article>)}</div> : <p className="auth-description">Ainda não há produtos publicados para esta loja.</p>}
-        <DeliveryQuotePanel tenantId={store.id} />
+        <DeliveryQuotePanel storeId={store.id} />
       </section>}
     </section>
   </main>
@@ -1273,7 +1273,7 @@ function PromoBannerCarousel({ banners }: { banners: string[] }) {
   </section>
 }
 
-function DeliveryQuotePanel({ tenantId }: { tenantId: string }) {
+function DeliveryQuotePanel({ storeId }: { storeId: string }) {
   const [cep, setCep] = useState('')
   const [quote, setQuote] = useState<DeliveryQuote | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1294,7 +1294,7 @@ function DeliveryQuotePanel({ tenantId }: { tenantId: string }) {
         throw new Error('Supabase ainda não está configurado. Preencha VITE_SUPABASE_ANON_KEY.')
       }
       const { data, error: quoteError } = await requireSupabase().functions.invoke('quote-delivery', {
-        body: { tenant_id: tenantId, destination_cep: destinationCep },
+        body: { store_id: storeId, destination_cep: destinationCep },
         headers: { Authorization: `Bearer ${anonKey}` },
       })
       if (quoteError) {
