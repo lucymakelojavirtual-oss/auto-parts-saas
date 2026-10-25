@@ -1289,8 +1289,13 @@ function DeliveryQuotePanel({ tenantId }: { tenantId: string }) {
       if (destinationCep.length !== 8) {
         throw new Error('Informe um CEP de destino válido com 8 dígitos.')
       }
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+      if (!anonKey) {
+        throw new Error('Supabase ainda não está configurado. Preencha VITE_SUPABASE_ANON_KEY.')
+      }
       const { data, error: quoteError } = await requireSupabase().functions.invoke('quote-delivery', {
         body: { tenant_id: tenantId, destination_cep: destinationCep },
+        headers: { Authorization: `Bearer ${anonKey}` },
       })
       if (quoteError) {
         if (quoteError.context instanceof Response) {
