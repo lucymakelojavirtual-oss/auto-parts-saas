@@ -38,15 +38,37 @@ O chat apresenta triagem inicial e, quando solicitado, persiste chamados e mensa
 
 Aplique `20261026000000_plan_commissions.sql` depois das migrações anteriores. Ela cadastra/atualiza os planos Essencial (R$ 149/mês, 4%), Aceleração (R$ 299/mês, 2,5%) e Sede (R$ 699/mês, 1,5%), com os limites de produtos, NF-e, vendedores e motoboys. O cadastro da loja exibe os principais limites e a comissão do plano.
 
-Quando um pedido é marcado como pago pelo backend, o trigger consulta o plano vigente da loja e cria uma linha idempotente em `transactions_split`, calculando a comissão sobre o subtotal dos produtos (sem frete). O split fica `pending` até o provedor de pagamento efetuar a liquidação. Esta base ainda não integra gateway nem transfere valores para a conta Master da Vancely; essa etapa exige uma função server-side com o provedor e os identificadores de conta/split configurados. Não marque pedidos como pagos pelo cliente/navegador.
+Quando um pedido é marcado como pago pelo webhook do Asaas, o trigger consulta o plano vigente da loja e cria uma linha idempotente em `transactions_split`, calculando a comissão sobre o subtotal dos produtos (sem frete). O Asaas divide o recebimento entre a carteira cadastrada da loja e a conta da plataforma; a linha financeira interna permanece `pending` até a conciliação de liquidação. O valor interno é uma estimativa sobre o bruto e deve ser conciliado com taxas e valores líquidos do provedor. Não marque pedidos como pagos pelo cliente/navegador.
 
 ## Frete, créditos e catálogo
 
-Aplique `20261030000000_delivery_wallet_catalog.sql` depois das migrações anteriores. Ela habilita a configuração de frete grátis por distância e preço por quilômetro excedente, recalcula o frete e o total do pedido no banco e mantém a comissão do Software Pai incidente somente sobre o subtotal, sem comissão sobre frete. A migração `20261031000000_delivery_route_cache.sql` protege o cache de rotas para leitura/escrita apenas pelo servidor e cria a chave única por loja e CEP.
+Aplique `20261030000000_delivery_wallet_catalog.sql` depois das migrações anteriores. Ela habilita a configuração de frete grátis por distância e preço por quilômetro excedente, recalcula o frete e o total do pedido no banco e mantém a comissão do Software Pai incidente somente sobre o subtotal, sem comissão sobre frete. A migração `20261031000000_delivery_route_cache.sql` protege o cache de rotas para leitura/escrita apenas pelo servidor e cria a chave por loja e par de CEPs de origem/destino.
 
-Implante a Edge Function (`supabase functions deploy quote-delivery`) após aplicar a migração `20261031000002_osm_routes_and_trial_storefronts.sql`. Em cache miss, a função geocodifica os CEPs de origem e destino no Nominatim (com `User-Agent: VancelySaaS-App/1.0`), calcula o trajeto no OSRM, grava distância, duração e geometria na tabela `delivery_routes_cache` e calcula o preço pelas regras existentes do lojista. O cache usa a loja e os CEPs normalizados de origem e destino. A vitrine renderiza o trajeto em Leaflet com tiles do OpenStreetMap. Lojas em status `trial` também podem abrir a vitrine e cotar entregas para validação.
+Implante a Edge Function (`supabase functions deploy quote-delivery`) após aplicar a migração `20261031000002_osm_routes_and_trial_storefronts.sql`. Em cache miss, a função geocodifica os CEPs de origem e destino no Nominatim (com `User-Agent: VancelySaaS-App/1.0`), calcula o trajeto no OSRM, grava distância e duração na tabela `delivery_routes_cache` e calcula o preço pelas regras existentes do lojista. O cache usa a loja e os CEPs normalizados de origem e destino. Lojas em status `trial` podem abrir a vitrine e testar o catálogo/cotação; o checkout de pedidos reais fica bloqueado até a ativação comercial.
 
-A vitrine permite cotar a entrega por CEP. Ainda não existe fluxo de carrinho/finalização de pedido ou integração de pagamentos nesta base; portanto, a cotação não cria pedido nem liquida/reserva valores no gateway. Quando o pedido existente for criado pelo backend com a distância da rota e marcado como pago, o trigger já registra o split do plano sobre o subtotal (frete excluído).
+A cotação de entrega acontece dentro do carrinho. O cliente pode escolher retirada quando habilitada pela loja ou entrega por motoboy; a tarifa e o frete grátis por distância são recalculados no banco ao criar o pedido.
+
+## Conta do cliente, checkout e pagamentos
+
+Aplique a migração `20261031000005_customer_commerce_and_asaas.sql` depois das migrações anteriores. O cliente pode navegar sem entrar, mas precisa criar conta, confirmar o e-mail e cadastrar CPF/CNPJ, telefone e endereço para concluir a compra. O checkout valida estoque e preços no banco, reserva estoque, cria o pedido e abre o checkout hospedado do Asaas para Pix ou cartão. O pedido só fica pago depois de um evento autenticado do webhook; não use os parâmetros de retorno do navegador como confirmação.
+
+Configure estes segredos em **Supabase Dashboard → Edge Functions → Secrets**:
+
+- `ASAAS_API_KEY`: chave de API da conta da plataforma Vancely. Use a chave de sandbox nos testes e a chave de produção somente no ambiente comercial.
+- `ASAAS_ENVIRONMENT`: `sandbox` ou `production`, correspondente à chave acima.
+- `ASAAS_WEBHOOK_TOKEN`: token aleatório forte, configurado também na autenticação do webhook Asaas (cabeçalho `asaas-access-token`).
+- `APP_BASE_URL`: origem pública da aplicação, por exemplo `https://app.exemplo.com`, sem caminho de página.
+
+Implante as funções:
+
+```sh
+supabase functions deploy create-asaas-checkout
+supabase functions deploy asaas-checkout-webhook --no-verify-jwt
+```
+
+Mantenha a verificação JWT habilitada em `create-asaas-checkout`. O webhook usa o token próprio do Asaas e precisa ser implantado com `--no-verify-jwt`. No painel Asaas, cadastre a URL `https://<PROJECT_REF>.supabase.co/functions/v1/asaas-checkout-webhook`, configure o mesmo token e habilite `CHECKOUT_CREATED`, `CHECKOUT_PAID`, `CHECKOUT_CANCELED` e `CHECKOUT_EXPIRED`. Cada lojista deve informar o `walletId` Asaas de recebimento em `/app` → configuração de pagamentos; o valor fica protegido no banco e não é exposto na vitrine. A chave da API e o token de webhook nunca devem ser colocados no frontend.
+
+Faça primeiro uma compra de teste completa em sandbox — incluindo entrega/retirada, Pix/cartão, evento de pagamento e cancelamento — antes de habilitar a chave de produção. A comissão é dividida no Checkout do Asaas e o webhook mantém o pedido e o estoque sincronizados. A linha interna de `transactions_split` continua sendo uma estimativa contábil baseada no subtotal bruto; concilie taxas do Asaas e valores líquidos com os relatórios do provedor antes de usar esses números para liquidação financeira.
 
 A mesma migração adiciona saldo cumulativo de créditos avulsos de placas e créditos adicionais de NF-e vinculados ao ciclo atual da assinatura. `monthly_plate_limit` é a cota mensal configurável de placas do plano (inicia em zero para não inventar limites comerciais). A cota mensal do plano e o uso de NF-e são renovados pelo período da assinatura existente; os créditos adicionais de NF-e são zerados quando esse período muda. Consultas de placas consomem primeiro a cota mensal e depois o saldo adicional persistente. O RPC `grant_tenant_credits` só pode ser chamado com `service_role`, após confirmação de pagamento server-side, e usa referência de pagamento idempotente. O frontend mostra as cotas e saldos, mas não inicia compras PIX porque esta aplicação ainda não integra um gateway.
 
@@ -72,7 +94,7 @@ Na Central Vancely, o seletor de lojas e as ações da lista abrem `/app/:slug`,
 
 ## Integrações pendentes
 
-As integrações Focus NFe, API de placas/cache e pagamentos ainda dependem de backend. O cadastro de recebimento fiscal é manual e registra os dados informados e o anexo XML/PDF; ele não importa automaticamente XML, valida a NF-e na SEFAZ nem substitui emissão/integração Focus NFe. A cotação de rota da vitrine usa a Edge Function `quote-delivery` e a tabela `delivery_routes_cache`; criação de pedidos e processamento de pagamentos continuam pendentes.
+As integrações Focus NFe e API externa de placas ainda dependem de configuração. O cadastro de recebimento fiscal é manual e registra os dados informados e o anexo XML/PDF; ele não importa automaticamente XML, valida a NF-e na SEFAZ nem substitui emissão/integração Focus NFe. A pesquisa por placa usa aplicações já cadastradas/cacheadas até a integração da API veicular.
 
 ## Verificação
 

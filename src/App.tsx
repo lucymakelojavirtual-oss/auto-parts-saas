@@ -1,9 +1,8 @@
-import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, Bike, ChartNoAxesCombined, Clock3, LifeBuoy, LockKeyhole, MapPinned, MessageCircle, Package, Palette, PanelsTopLeft, RefreshCw, Send, ShoppingCart, Store, Trash2, Upload, Wallet, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bike, CarFront, ChartNoAxesCombined, LifeBuoy, LockKeyhole, MessageCircle, Minus, Package, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
-const RouteMap = lazy(() => import('./components/RouteMap'))
 
 type Plan = {
   id: string
@@ -54,6 +53,34 @@ type InventoryReceipt = {
   attachment_path: string
   received_at: string
   attachment_url: string
+}
+type CustomerProfile = {
+  user_id: string
+  full_name: string
+  document: string
+  phone: string
+  postal_code: string
+  street: string
+  address_number: string
+  complement: string
+  district: string
+  city: string
+  state: string
+}
+type CustomerOrder = {
+  id: string
+  order_number: number
+  status: string
+  payment_status: string
+  payment_method: string
+  subtotal: number
+  shipping_amount: number
+  total: number
+  is_pickup: boolean
+  delivery_address: Record<string, string> | null
+  created_at: string
+  asaas_checkout_url: string | null
+  items: { product_name: string; sku: string; quantity: number; unit_price: number }[]
 }
 type TenantCreditStatus = {
   period_start: string
@@ -122,6 +149,39 @@ function errorText(error: unknown) {
 function monthDisplayDate(value: string) {
   const [year, month] = value.slice(0, 7).split('-').map(Number)
   return new Date(year, month - 1, 15, 12)
+}
+
+function storeThemeStyle(color?: string): React.CSSProperties {
+  const primaryColor = color && /^#[\da-f]{6}$/i.test(color) ? color : '#293125'
+  return { '--store-color': primaryColor } as React.CSSProperties
+}
+
+function isValidBrDocument(value: string) {
+  const digits = value.replace(/\D/g, '')
+  if (!digits || /^(\d)\1+$/.test(digits)) return false
+  if (digits.length === 11) {
+    const calculate = (length: number) => {
+      const total = Array.from({ length }, (_, index) => Number(digits[index]) * (length + 1 - index))
+        .reduce((sum, digit) => sum + digit, 0)
+      const remainder = (total * 10) % 11
+      return remainder === 10 ? 0 : remainder
+    }
+    return calculate(9) === Number(digits[9]) && calculate(10) === Number(digits[10])
+  }
+  if (digits.length === 14) {
+    const calculate = (length: number) => {
+      let weight = 2
+      let total = 0
+      for (let index = length - 1; index >= 0; index--) {
+        total += Number(digits[index]) * weight
+        weight = weight === 9 ? 2 : weight + 1
+      }
+      const remainder = total % 11
+      return remainder < 2 ? 0 : 11 - remainder
+    }
+    return calculate(12) === Number(digits[12]) && calculate(13) === Number(digits[13])
+  }
+  return false
 }
 
 function splitList(value: string) {
@@ -237,6 +297,7 @@ export default function App() {
   const path = window.location.pathname.replace(/\/+$/, '') || '/'
 
   if (path === '/registrar') return <RegistrationPage />
+  if (path === '/cliente' || path === '/cliente/entrar') return <CustomerAccountPage />
   if (path === '/login') return <LoginPage kind="merchant" />
   if (path === '/admin/login') return <LoginPage kind="admin" />
   const storefrontMatch = path.match(/^\/loja\/([^/]+)$/)
@@ -586,7 +647,7 @@ function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { use
   const isStoreTeam = portal.role !== 'courier'
   const canManageSettings = masterPreview || ['owner', 'admin', 'manager'].includes(portal.role)
   return (
-    <main className="portal-page">
+    <main className="portal-page" style={storeThemeStyle(currentPortal.brand.primary_color)}>
       {masterPreview && <MasterViewingBanner tenantName={currentPortal.tenantName} />}
       <PortalHeader user={user} title={currentPortal.tenantName} onLogout={onLogout} />
       <section className="portal-content" style={{ '--store-color': currentPortal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
@@ -609,6 +670,7 @@ function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { use
         {isStoreTeam && <ProductCatalogManager portal={currentPortal} role={portal.role} />}
         {isStoreTeam && !masterPreview && <TenantCreditPanel portal={currentPortal} />}
         {canManageSettings && <ShippingSettings portal={currentPortal} />}
+        {canManageSettings && <TenantAsaasSettings portal={currentPortal} />}
         {canManageSettings && <TenantBrandSettings portal={currentPortal} onSaved={(brand, logoUrl) => {
           setCurrentPortal((current) => ({ ...current, brand, logoUrl }))
         }} />}
@@ -1107,6 +1169,63 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
   </section>
 }
 
+function TenantAsaasSettings({ portal }: { portal: Portal }) {
+  const [walletId, setWalletId] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const { data, error: loadError } = await requireSupabase().rpc('get_tenant_asaas_wallet', { p_tenant_id: portal.tenantId })
+        if (loadError) throw loadError
+        if (active && typeof data === 'string') setWalletId(data)
+      } catch (reason) {
+        if (active) setError(errorText(reason))
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [portal.tenantId])
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(walletId.trim())) {
+        throw new Error('Informe o walletId UUID da conta Asaas desta loja.')
+      }
+      const { error: saveError } = await requireSupabase().rpc('save_tenant_asaas_wallet', {
+        p_tenant_id: portal.tenantId,
+        p_wallet_id: walletId.trim(),
+      })
+      if (saveError) throw saveError
+      setNotice('Carteira Asaas da loja salva. A chave de API permanece somente no servidor.')
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="portal-panel">
+    <div className="portal-panel-heading"><div><p className="eyebrow">PAGAMENTOS DA LOJA</p><h2><Wallet size={17} /> Conta Asaas e split</h2></div></div>
+    <p className="image-optimization-note">Informe o walletId da conta Asaas que receberá a parte da loja. A comissão da Vancely é separada no checkout. Nunca informe uma chave de API aqui.</p>
+    <form className="asaas-settings-form" onSubmit={save}>
+      <label>walletId Asaas<input required maxLength={36} value={walletId} onChange={(event) => setWalletId(event.target.value)} placeholder="00000000-0000-0000-0000-000000000000" disabled={loading || busy} /></label>
+      {error && <p className="form-message form-error" role="alert">{error}</p>}
+      {notice && <p className="form-message" role="status">{notice}</p>}
+      <button className="auth-button auth-button-primary" type="submit" disabled={loading || busy}>{busy ? 'Salvando…' : 'Salvar carteira Asaas'}</button>
+    </form>
+  </section>
+}
+
 function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (brand: Portal['brand'], logoUrl: string | null) => void }) {
   const [appName, setAppName] = useState(portal.brand.app_name ?? portal.tenantName)
   const [primaryColor, setPrimaryColor] = useState(portal.brand.primary_color ?? '#293125')
@@ -1273,7 +1392,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
 
 function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user: User; portal: Portal; onLogout: () => void; masterPreview?: boolean }) {
   return (
-    <main className="portal-page" style={{ '--store-color': portal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
+    <main className="portal-page" style={storeThemeStyle(portal.brand.primary_color)}>
       {masterPreview && <MasterViewingBanner tenantName={portal.tenantName} />}
       <PortalHeader user={user} title={`Entregas · ${portal.tenantName}`} onLogout={onLogout} />
       <section className="portal-content">
@@ -1442,14 +1561,668 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
   )
 }
 
+function CustomerAccountPage() {
+  const [user, setUser] = useState<User | null>(null)
+  const [profile, setProfile] = useState<CustomerProfile | null>(null)
+  const [orders, setOrders] = useState<CustomerOrder[]>([])
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [cancelBusyId, setCancelBusyId] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [fields, setFields] = useState({
+    full_name: '',
+    document: '',
+    phone: '',
+    postal_code: '',
+    street: '',
+    address_number: '',
+    complement: '',
+    district: '',
+    city: '',
+    state: '',
+  })
+
+  const requestedNext = new URLSearchParams(window.location.search).get('next')
+  const nextPath = requestedNext && /^\/loja\/[^/?#]+(?:\?checkout=1)?$/.test(requestedNext)
+    ? requestedNext
+    : ''
+  const returnMessage = new URLSearchParams(window.location.search).get('retorno')
+  const returningOrder = new URLSearchParams(window.location.search).get('pedido')
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const client = requireSupabase()
+        const { data: sessionData, error: sessionError } = await client.auth.getSession()
+        if (sessionError) throw sessionError
+        if (!sessionData.session) return
+        const { data: userData, error: userError } = await client.auth.getUser()
+        if (userError) throw userError
+        if (!userData.user) return
+        const { data: profileData, error: profileError } = await client.from('customer_profiles')
+          .select('user_id, full_name, document, phone, postal_code, street, address_number, complement, district, city, state')
+          .eq('user_id', userData.user.id)
+          .maybeSingle()
+        if (profileError) throw profileError
+        if (!active) return
+        setUser(userData.user)
+        setEmail(userData.user.email ?? '')
+        if (profileData) {
+          const currentProfile = profileData as CustomerProfile
+          setProfile(currentProfile)
+          setFields({
+            full_name: currentProfile.full_name,
+            document: currentProfile.document,
+            phone: currentProfile.phone,
+            postal_code: currentProfile.postal_code,
+            street: currentProfile.street,
+            address_number: currentProfile.address_number,
+            complement: currentProfile.complement,
+            district: currentProfile.district,
+            city: currentProfile.city,
+            state: currentProfile.state,
+          })
+          const { data: orderRows, error: ordersError } = await client.from('orders')
+            .select('id, order_number, status, payment_status, payment_method, subtotal, shipping_amount, total, is_pickup, delivery_address, created_at, asaas_checkout_url')
+            .eq('customer_id', userData.user.id)
+            .order('created_at', { ascending: false })
+            .limit(50)
+          if (ordersError) throw ordersError
+          const rows = orderRows ?? []
+          const orderIds = rows.map((order) => order.id)
+          const { data: itemRows, error: itemsError } = orderIds.length
+            ? await client.from('order_items').select('order_id, product_name, sku, quantity, unit_price').in('order_id', orderIds)
+            : { data: [], error: null }
+          if (itemsError) throw itemsError
+          if (!active) return
+          setOrders(rows.map((order) => ({
+            ...order,
+            items: (itemRows ?? []).filter((item) => item.order_id === order.id),
+          })) as CustomerOrder[])
+          if (nextPath) navigate(nextPath)
+        } else {
+          setEditing(true)
+        }
+      } catch (reason) {
+        if (active) setError(errorText(reason))
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [])
+
+  function updateField(field: keyof typeof fields, value: string) {
+    setFields((current) => ({ ...current, [field]: value }))
+  }
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const client = requireSupabase()
+      if (authMode === 'register') {
+        const redirect = `${window.location.origin}/cliente/entrar${nextPath ? `?next=${encodeURIComponent(nextPath)}` : ''}`
+        const { data, error: signupError } = await client.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { emailRedirectTo: redirect },
+        })
+        if (signupError) throw signupError
+        if (!data.session) {
+          setNotice('Conta criada. Confirme seu e-mail; depois entre para cadastrar CPF/CNPJ e concluir a compra.')
+          return
+        }
+        window.location.reload()
+        return
+      }
+      const { error: signinError } = await client.auth.signInWithPassword({ email: email.trim(), password })
+      if (signinError) throw signinError
+      window.location.reload()
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      if (!user) throw new Error('Entre na sua conta antes de salvar seus dados.')
+      const document = fields.document.replace(/\D/g, '')
+      if (!isValidBrDocument(document)) throw new Error('Informe um CPF ou CNPJ válido.')
+      const phone = fields.phone.replace(/\D/g, '')
+      if (phone.length < 10 || phone.length > 15) throw new Error('Informe um telefone com DDD válido.')
+      const postalCode = fields.postal_code.replace(/\D/g, '')
+      if (postalCode.length !== 8) throw new Error('Informe um CEP válido com 8 dígitos.')
+      const { error: saveError } = await requireSupabase().rpc('save_customer_profile', {
+        p_full_name: fields.full_name.trim(),
+        p_document: document,
+        p_phone: phone,
+        p_postal_code: postalCode,
+        p_street: fields.street.trim(),
+        p_address_number: fields.address_number.trim(),
+        p_complement: fields.complement.trim(),
+        p_district: fields.district.trim(),
+        p_city: fields.city.trim(),
+        p_state: fields.state.trim().toUpperCase(),
+      })
+      if (saveError) throw saveError
+      if (nextPath) {
+        navigate(nextPath)
+        return
+      }
+      setProfile({ user_id: user.id, ...fields, document, phone, postal_code: postalCode, state: fields.state.toUpperCase() })
+      setEditing(false)
+      setNotice('Seus dados foram salvos com segurança para os próximos pedidos.')
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function logout() {
+    const { error: logoutError } = await requireSupabase().auth.signOut()
+    if (logoutError) {
+      setError(errorText(logoutError))
+      return
+    }
+    window.location.reload()
+  }
+
+  async function cancelPendingOrder(orderId: string) {
+    setCancelBusyId(orderId)
+    setError('')
+    try {
+      const { error: cancelError } = await requireSupabase().rpc('cancel_my_pending_storefront_order', {
+        p_order_id: orderId,
+      })
+      if (cancelError) throw cancelError
+      window.location.reload()
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setCancelBusyId('')
+    }
+  }
+
+  const themeColor = (() => {
+    try {
+      return localStorage.getItem('vancely-store-theme') ?? undefined
+    } catch {
+      return undefined
+    }
+  })()
+
+  if (loading) return <PageMessage title="Carregando sua conta…" />
+  return <main className="portal-page customer-account-page" style={storeThemeStyle(themeColor)}>
+    <header className="portal-header">
+      <a href="/"><Brand /></a>
+      <span>Minha conta e pedidos</span>
+      <div>{user ? <><small>{user.email}</small><button className="auth-button auth-button-secondary" onClick={() => void logout()}>Sair</button></> : <a className="auth-button auth-button-secondary" href="/">Voltar à vitrine</a>}</div>
+    </header>
+    <section className="portal-content customer-account-content">
+      <p className="eyebrow">ÁREA DO CLIENTE</p>
+      <h1><UserRound size={23} /> {user ? `Olá, ${profile?.full_name ?? user.email}` : 'Entre para finalizar sua compra'}</h1>
+      {returningOrder && <p className="form-message customer-return-message" role="status">
+        {returnMessage === 'cancelado' ? 'O checkout foi cancelado. Se o pedido ainda estiver pendente, você poderá tentar novamente abaixo.' : returnMessage === 'expirado' ? 'O prazo do checkout terminou. Verifique o status do pedido; o pagamento só será confirmado pelo retorno seguro do Asaas.' : 'Retorno do Asaas recebido. A confirmação de pagamento depende do webhook seguro e não apenas desta página.'}
+      </p>}
+      {!user ? <section className="portal-panel customer-auth-panel">
+        <div className="portal-panel-heading"><div><p className="eyebrow">COMPRA SEGURA</p><h2>{authMode === 'login' ? 'Acesse sua conta' : 'Crie sua conta de cliente'}</h2></div></div>
+        <p className="auth-description">Você pode navegar pelo catálogo sem entrar. Para finalizar o pedido, identificamos sua conta e guardamos seus dados e histórico.</p>
+        <form className="customer-profile-form" onSubmit={submitAuth}>
+          <label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+          <label>Senha<input type="password" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+          {error && <p className="form-message form-error" role="alert">{error}</p>}
+          {notice && <p className="form-message" role="status">{notice}</p>}
+          <button className="auth-button auth-button-primary" type="submit" disabled={busy}>{busy ? 'Aguarde…' : authMode === 'login' ? 'Entrar' : 'Criar conta'}</button>
+        </form>
+        <button className="auth-subtle-link customer-mode-toggle" type="button" onClick={() => { setAuthMode((mode) => mode === 'login' ? 'register' : 'login'); setError(''); setNotice('') }}>
+          {authMode === 'login' ? 'Ainda não tenho conta' : 'Já tenho conta'}
+        </button>
+      </section> : <>
+        {profile && !editing && <section className="portal-panel customer-profile-summary">
+          <div className="portal-panel-heading"><div><p className="eyebrow">DADOS SALVOS</p><h2>Seu cadastro</h2></div><button className="auth-button auth-button-secondary" onClick={() => setEditing(true)}>Editar dados</button></div>
+          <p><b>{profile.full_name}</b> · Documento {profile.document.length === 11 ? 'CPF' : 'CNPJ'} final {profile.document.slice(-4)}</p>
+          <small>{profile.phone} · CEP {profile.postal_code}</small>
+        </section>}
+        {(editing || !profile) && <section className="portal-panel">
+          <div className="portal-panel-heading"><div><p className="eyebrow">CADASTRO ÚNICO</p><h2>Dados para compra e garantia</h2></div></div>
+          <p className="auth-description">Seu CPF/CNPJ e contato ficam vinculados à sua conta e são reutilizados nos próximos pedidos. A loja só recebe os dados necessários ao pedido.</p>
+          <form className="customer-profile-form" onSubmit={saveProfile}>
+            <label>Nome completo ou razão social<input required minLength={2} maxLength={160} value={fields.full_name} onChange={(event) => updateField('full_name', event.target.value)} /></label>
+            <div className="auth-form-row">
+              <label>CPF ou CNPJ<input required inputMode="numeric" maxLength={18} value={fields.document} onChange={(event) => updateField('document', event.target.value)} /></label>
+              <label>Telefone com DDD<input required type="tel" autoComplete="tel" value={fields.phone} onChange={(event) => updateField('phone', event.target.value)} /></label>
+            </div>
+            <h3>Endereço padrão</h3>
+            <div className="auth-form-row">
+              <label>CEP<input required inputMode="numeric" autoComplete="postal-code" maxLength={9} value={fields.postal_code} onChange={(event) => updateField('postal_code', event.target.value)} /></label>
+              <label>Rua / avenida<input maxLength={160} autoComplete="street-address" value={fields.street} onChange={(event) => updateField('street', event.target.value)} /></label>
+            </div>
+            <div className="auth-form-row">
+              <label>Número<input maxLength={30} value={fields.address_number} onChange={(event) => updateField('address_number', event.target.value)} /></label>
+              <label>Complemento<input maxLength={120} value={fields.complement} onChange={(event) => updateField('complement', event.target.value)} /></label>
+            </div>
+            <div className="auth-form-row">
+              <label>Bairro<input maxLength={120} value={fields.district} onChange={(event) => updateField('district', event.target.value)} /></label>
+              <label>Cidade<input maxLength={120} value={fields.city} onChange={(event) => updateField('city', event.target.value)} /></label>
+              <label>UF<input maxLength={2} value={fields.state} onChange={(event) => updateField('state', event.target.value)} /></label>
+            </div>
+            {error && <p className="form-message form-error" role="alert">{error}</p>}
+            {notice && <p className="form-message" role="status">{notice}</p>}
+            <div className="product-form-actions">
+              <button className="auth-button auth-button-primary" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar meus dados'}</button>
+              {profile && <button className="auth-button auth-button-secondary" type="button" onClick={() => { setEditing(false); setError('') }} disabled={busy}>Cancelar</button>}
+            </div>
+          </form>
+        </section>}
+        {profile && <section className="portal-panel customer-orders-panel">
+          <div className="portal-panel-heading"><div><p className="eyebrow">HISTÓRICO E GARANTIA</p><h2>Meus pedidos</h2></div><button className="auth-button auth-button-secondary" onClick={() => window.location.reload()}>Atualizar</button></div>
+          {orders.length ? <div className="customer-orders-list">{orders.map((order) => <article key={order.id}>
+            <div className="customer-order-heading"><div><b>Pedido #{order.order_number}</b><small>{new Date(order.created_at).toLocaleString('pt-BR')} · {order.is_pickup ? 'Retirada no balcão' : 'Entrega por motoboy'}</small></div><span className={`customer-order-status status-${order.payment_status}`}>{order.payment_status === 'paid' ? 'Pagamento confirmado' : order.payment_status === 'failed' ? 'Pagamento não concluído' : order.payment_status === 'refunded' ? 'Estornado' : 'Aguardando pagamento'}</span></div>
+            <div className="customer-order-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity}× {item.product_name} ({item.sku})</span>)}</div>
+            {order.delivery_address && <small>{order.delivery_address.street}, {order.delivery_address.number} · CEP {order.delivery_address.postal_code}</small>}
+            <div className="customer-order-total"><span>{order.status === 'cancelled' ? 'Pedido cancelado' : order.status === 'delivered' ? 'Entregue' : order.status === 'delivery' ? 'Em entrega' : order.status === 'separating' ? 'Separando produtos' : order.status === 'checking' ? 'Conferindo pedido' : 'Recebido pela loja'}</span><b>Total {money(Number(order.total))}</b></div>
+            {order.payment_status === 'pending' && order.asaas_checkout_url && <a className="auth-button auth-button-primary" href={order.asaas_checkout_url} target="_blank" rel="noreferrer">Continuar pagamento no Asaas</a>}
+            {order.payment_status === 'pending' && !order.asaas_checkout_url && <button className="auth-button auth-button-secondary" type="button" disabled={cancelBusyId === order.id} onClick={() => void cancelPendingOrder(order.id)}>{cancelBusyId === order.id ? 'Cancelando…' : 'Cancelar pedido pendente'}</button>}
+          </article>)}</div> : <p className="auth-description">Seus pedidos finalizados aparecerão aqui, com status e número para acompanhamento e garantia.</p>}
+        </section>}
+      </>}
+    </section>
+  </main>
+}
+
+function StorefrontShop({
+  store,
+  products,
+  pickupEnabled,
+  freeUntilKm,
+}: {
+  store: { id: string; slug: string; status: string }
+  products: Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]
+  pickupEnabled: boolean
+  freeUntilKm: number
+}) {
+  const cartStorageKey = `vancely-cart-${store.slug}`
+  const [cart, setCart] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(cartStorageKey)
+      const parsed: unknown = saved ? JSON.parse(saved) : {}
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+      return Object.fromEntries(Object.entries(parsed).filter(([, quantity]) =>
+        Number.isInteger(quantity) && Number(quantity) > 0,
+      )) as Record<string, number>
+    } catch {
+      return {}
+    }
+  })
+  const [userId, setUserId] = useState('')
+  const [profile, setProfile] = useState<CustomerProfile | null>(null)
+  const [search, setSearch] = useState('')
+  const [make, setMake] = useState('')
+  const [model, setModel] = useState('')
+  const [year, setYear] = useState('')
+  const [plate, setPlate] = useState('')
+  const [vehicleNotice, setVehicleNotice] = useState('')
+  const [vehicleError, setVehicleError] = useState('')
+  const [searchBusy, setSearchBusy] = useState(false)
+  const [checkoutOpen, setCheckoutOpen] = useState(new URLSearchParams(window.location.search).get('checkout') === '1')
+  const [deliveryOption, setDeliveryOption] = useState<'pickup' | 'delivery'>(pickupEnabled ? 'pickup' : 'delivery')
+  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'card'>('pix')
+  const [address, setAddress] = useState({
+    postal_code: '', street: '', number: '', complement: '', district: '', city: '', state: '',
+  })
+  const [quote, setQuote] = useState<DeliveryQuote | null>(null)
+  const [quoteBusy, setQuoteBusy] = useState(false)
+  const [checkoutBusy, setCheckoutBusy] = useState(false)
+  const [checkoutError, setCheckoutError] = useState('')
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(cartStorageKey, JSON.stringify(cart))
+    } catch (reason) {
+      setCheckoutError(`Não foi possível salvar o carrinho neste navegador: ${errorText(reason)}`)
+    }
+  }, [cart, cartStorageKey])
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const client = requireSupabase()
+        const { data: sessionData, error: sessionError } = await client.auth.getSession()
+        if (sessionError) throw sessionError
+        if (!sessionData.session) return
+        const { data: userData, error: userError } = await client.auth.getUser()
+        if (userError) throw userError
+        if (!userData.user) return
+        if (active) setUserId(userData.user.id)
+        const { data, error: profileError } = await client.from('customer_profiles')
+          .select('user_id, full_name, document, phone, postal_code, street, address_number, complement, district, city, state')
+          .eq('user_id', userData.user.id).maybeSingle()
+        if (profileError) throw profileError
+        if (!active || !data) return
+        const savedProfile = data as CustomerProfile
+        setProfile(savedProfile)
+        setAddress({
+          postal_code: savedProfile.postal_code,
+          street: savedProfile.street,
+          number: savedProfile.address_number,
+          complement: savedProfile.complement,
+          district: savedProfile.district,
+          city: savedProfile.city,
+          state: savedProfile.state,
+        })
+      } catch (reason) {
+        if (active) setCheckoutError(errorText(reason))
+      }
+    })()
+    return () => { active = false }
+  }, [])
+
+  const makes = [...new Set(products.flatMap((product) => product.compatible_makes))].sort()
+  const models = [...new Set(products.flatMap((product) => product.compatible_models))].sort()
+  const years = [...new Set(products.flatMap((product) => product.compatible_years.map(String)))].sort()
+  const cartProducts = products.filter((product) => (cart[product.id] ?? 0) > 0)
+  const cartCount = cartProducts.reduce((total, product) => total + cart[product.id], 0)
+  const subtotal = cartProducts.reduce((total, product) => total + Number(product.price) * cart[product.id], 0)
+  const filteredProducts = products.filter((product) => {
+    const query = search.trim().toLocaleLowerCase('pt-BR')
+    const textMatch = !query || [product.name, product.sku, product.description ?? '']
+      .some((value) => value.toLocaleLowerCase('pt-BR').includes(query))
+    const makeMatch = !make || product.compatible_makes.length === 0 || product.compatible_makes.some((value) => value.toLocaleLowerCase('pt-BR') === make.toLocaleLowerCase('pt-BR'))
+    const modelMatch = !model || product.compatible_models.length === 0 || product.compatible_models.some((value) => value.toLocaleLowerCase('pt-BR') === model.toLocaleLowerCase('pt-BR'))
+    const yearMatch = !year || product.compatible_years.length === 0 || product.compatible_years.includes(Number(year))
+    return textMatch && makeMatch && modelMatch && yearMatch
+  })
+
+  function updateAddress(field: keyof typeof address, value: string) {
+    setAddress((current) => ({ ...current, [field]: value }))
+    if (field === 'postal_code') setQuote(null)
+  }
+
+  function updateCart(product: typeof products[number], change: number) {
+    setCart((current) => {
+      const nextQuantity = Math.min(product.stock, Math.max(0, (current[product.id] ?? 0) + change))
+      const updated = { ...current }
+      if (nextQuantity === 0) delete updated[product.id]
+      else updated[product.id] = nextQuantity
+      return updated
+    })
+  }
+
+  async function searchVehicleByPlate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setVehicleError('')
+    setVehicleNotice('')
+    const normalizedPlate = plate.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
+    if (!/^[A-Z0-9]{7}$/.test(normalizedPlate)) {
+      setVehicleError('Informe uma placa com 7 letras e números.')
+      return
+    }
+    if (!userId) {
+      setVehicleNotice('A consulta por placa exige uma conta. Você pode pesquisar por marca, modelo e ano sem entrar.')
+      return
+    }
+    setSearchBusy(true)
+    try {
+      const { data, error: lookupError } = await requireSupabase().rpc('get_cached_vehicle', { p_plate: normalizedPlate })
+      if (lookupError) throw lookupError
+      const vehicle = data?.[0] as { make: string; model: string; year: number; motor: string } | undefined
+      if (!vehicle) {
+        setVehicleNotice('Essa placa ainda não está no cache. A consulta automática depende da integração de placas; pesquise pelo veículo ou peça nos campos abaixo.')
+        return
+      }
+      setMake(vehicle.make)
+      setModel(vehicle.model)
+      setYear(String(vehicle.year))
+      setVehicleNotice(`Veículo identificado no cache: ${vehicle.make} ${vehicle.model} ${vehicle.year}${vehicle.motor ? ` · ${vehicle.motor}` : ''}.`)
+    } catch (reason) {
+      setVehicleError(errorText(reason))
+    } finally {
+      setSearchBusy(false)
+    }
+  }
+
+  async function lookupPostalCode() {
+    const postalCode = address.postal_code.replace(/\D/g, '')
+    if (postalCode.length !== 8) return
+    try {
+      const response = await fetch(`https://viacep.com.br/ws/${postalCode}/json/`)
+      if (!response.ok) throw new Error('Não foi possível consultar esse CEP agora.')
+      const result = await response.json()
+      if (result.erro) throw new Error('CEP não encontrado. Confira o número ou preencha o endereço manualmente.')
+      setAddress((current) => ({
+        ...current,
+        street: result.logradouro || current.street,
+        district: result.bairro || current.district,
+        city: result.localidade || current.city,
+        state: result.uf || current.state,
+      }))
+    } catch (reason) {
+      setCheckoutError(errorText(reason))
+    }
+  }
+
+  async function calculateCheckoutQuote() {
+    setQuoteBusy(true)
+    setCheckoutError('')
+    setQuote(null)
+    try {
+      const postalCode = address.postal_code.replace(/\D/g, '')
+      if (postalCode.length !== 8) throw new Error('Informe um CEP de entrega válido com 8 dígitos.')
+      const { data, error: quoteError } = await requireSupabase().functions.invoke('quote-delivery', {
+        body: { store_id: store.id, destination_cep: postalCode },
+      })
+      if (quoteError) {
+        if (quoteError.context instanceof Response) {
+          const responseBody = await quoteError.context.clone().json().catch(() => null)
+          if (typeof responseBody?.error === 'string') throw new Error(responseBody.error)
+        }
+        throw quoteError
+      }
+      if (!data || typeof data.shipping_amount !== 'number' || typeof data.distance_km !== 'number') {
+        throw new Error('O serviço de rotas retornou uma cotação inválida.')
+      }
+      setQuote(data as DeliveryQuote)
+    } catch (reason) {
+      setCheckoutError(errorText(reason))
+    } finally {
+      setQuoteBusy(false)
+    }
+  }
+
+  async function checkout(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setCheckoutError('')
+    if (!cartProducts.length) {
+      setCheckoutError('Adicione ao menos um produto ao carrinho.')
+      return
+    }
+    if (!userId) {
+      navigate(`/cliente/entrar?next=${encodeURIComponent(`/loja/${store.slug}?checkout=1`)}`)
+      return
+    }
+    if (!profile) {
+      navigate(`/cliente/entrar?next=${encodeURIComponent(`/loja/${store.slug}?checkout=1`)}`)
+      return
+    }
+    setCheckoutBusy(true)
+    try {
+      if (deliveryOption === 'delivery') {
+        const postalCode = address.postal_code.replace(/\D/g, '')
+        if (postalCode.length !== 8 || !address.street.trim() || !address.number.trim()
+          || !address.city.trim() || !/^[A-Za-z]{2}$/.test(address.state.trim())) {
+          throw new Error('Preencha CEP, rua, número, cidade e UF para receber por motoboy.')
+        }
+        await requireSupabase().rpc('save_customer_profile', {
+          p_full_name: profile.full_name,
+          p_document: profile.document,
+          p_phone: profile.phone,
+          p_postal_code: postalCode,
+          p_street: address.street.trim(),
+          p_address_number: address.number.trim(),
+          p_complement: address.complement.trim(),
+          p_district: address.district.trim(),
+          p_city: address.city.trim(),
+          p_state: address.state.trim().toUpperCase(),
+        }).then(({ error: profileError }) => {
+          if (profileError) throw profileError
+        })
+        const { data: quoteData, error: quoteError } = await requireSupabase().functions.invoke('quote-delivery', {
+          body: { store_id: store.id, destination_cep: postalCode },
+        })
+        if (quoteError) {
+          if (quoteError.context instanceof Response) {
+            const responseBody = await quoteError.context.clone().json().catch(() => null)
+            if (typeof responseBody?.error === 'string') throw new Error(responseBody.error)
+          }
+          throw quoteError
+        }
+        if (!quoteData || typeof quoteData.shipping_amount !== 'number' || typeof quoteData.distance_km !== 'number') {
+          throw new Error('O serviço de rotas retornou uma cotação inválida.')
+        }
+        setQuote(quoteData as DeliveryQuote)
+      }
+      const client = requireSupabase()
+      const { data: orderData, error: orderError } = await client.rpc('create_storefront_order', {
+        p_tenant_id: store.id,
+        p_items: cartProducts.map((product) => ({ product_id: product.id, quantity: cart[product.id] })),
+        p_delivery_option: deliveryOption,
+        p_delivery_address: deliveryOption === 'delivery' ? {
+          postal_code: address.postal_code.replace(/\D/g, ''),
+          street: address.street.trim(),
+          number: address.number.trim(),
+          complement: address.complement.trim(),
+          district: address.district.trim(),
+          city: address.city.trim(),
+          state: address.state.trim().toUpperCase(),
+        } : null,
+        p_payment_method: paymentMethod,
+      })
+      if (orderError) throw orderError
+      const order = orderData as { id: string; order_number: number; total: number }
+      const { data: checkoutData, error: paymentError } = await client.functions.invoke('create-asaas-checkout', {
+        body: { order_id: order.id },
+      })
+      if (paymentError) {
+        if (paymentError.context instanceof Response) {
+          const responseBody = await paymentError.context.clone().json().catch(() => null)
+          if (typeof responseBody?.error === 'string') throw new Error(responseBody.error)
+        }
+        throw paymentError
+      }
+      if (typeof checkoutData?.checkout_url !== 'string' || !checkoutData.checkout_url.startsWith('https://')) {
+        throw new Error('O Asaas não retornou um link seguro para pagamento. Consulte o histórico de pedidos antes de repetir.')
+      }
+      setCart({})
+      localStorage.removeItem(cartStorageKey)
+      window.location.assign(checkoutData.checkout_url)
+    } catch (reason) {
+      setCheckoutError(errorText(reason))
+    } finally {
+      setCheckoutBusy(false)
+    }
+  }
+
+  return <section className="storefront-catalog">
+    <div className="storefront-shop-heading">
+      <div><p className="eyebrow">CATÁLOGO DA LOJA</p><h2>Encontre sua peça</h2><p>Pesquise pelo nome da peça ou filtre pela aplicação do seu veículo.</p></div>
+      <button className="auth-button auth-button-primary storefront-cart-toggle" type="button" onClick={() => setCheckoutOpen((open) => !open)}><ShoppingCart size={16} /> Carrinho ({cartCount})</button>
+    </div>
+    <div className="storefront-search-panel">
+      <label className="storefront-part-search"><Search size={16} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar peça, nome ou código SKU" /></label>
+      <form className="storefront-plate-search" onSubmit={(event) => void searchVehicleByPlate(event)}>
+        <label><CarFront size={16} /> Buscar aplicação pela placa</label>
+        <div><input value={plate} maxLength={8} onChange={(event) => setPlate(event.target.value.toUpperCase())} placeholder="ABC1D23" aria-label="Placa do veículo" /><button className="auth-button auth-button-secondary" type="submit" disabled={searchBusy}>{searchBusy ? 'Buscando…' : 'Consultar placa'}</button></div>
+      </form>
+      <div className="storefront-fitment-search">
+        <label>Marca<select value={make} onChange={(event) => setMake(event.target.value)}><option value="">Todas as marcas</option>{makes.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Modelo<select value={model} onChange={(event) => setModel(event.target.value)}><option value="">Todos os modelos</option>{models.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Ano<select value={year} onChange={(event) => setYear(event.target.value)}><option value="">Todos os anos</option>{years.map((value) => <option key={value}>{value}</option>)}</select></label>
+      </div>
+      {vehicleError && <p className="form-message form-error" role="alert">{vehicleError}</p>}
+      {vehicleNotice && <p className="form-message" role="status">{vehicleNotice}</p>}
+    </div>
+    {filteredProducts.length ? <div className="storefront-products">{filteredProducts.map((product) => {
+      const quantity = cart[product.id] ?? 0
+      return <article key={product.id}>
+        {product.image_url ? <img src={product.image_url} alt="" /> : <div className="storefront-product-placeholder"><Package size={24} /></div>}
+        <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}{productFitment(product) && <small className="storefront-fitment">{productFitment(product)}</small>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Sem estoque disponível'}</small>
+          {quantity === 0 ? <button className="auth-button auth-button-primary storefront-add-button" type="button" disabled={product.stock <= 0} onClick={() => updateCart(product, 1)}><Plus size={15} /> Adicionar</button> : <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{quantity}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={quantity >= product.stock} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>}
+        </div>
+      </article>
+    })}</div> : <p className="auth-description">Nenhuma peça encontrada para esses filtros. Ajuste a busca ou pesquise pelo modelo.</p>}
+
+    {checkoutOpen && <section className="storefront-checkout" aria-label="Carrinho e finalização da compra">
+      <div className="portal-panel-heading"><div><p className="eyebrow">SEU PEDIDO</p><h2><ShoppingCart size={17} /> Carrinho e entrega</h2></div><button className="icon-button" type="button" aria-label="Fechar carrinho" onClick={() => setCheckoutOpen(false)}><X size={18} /></button></div>
+      {cartProducts.length ? <div className="storefront-cart-items">{cartProducts.map((product) => <article key={product.id}>
+        <div><b>{product.name}</b><small>{cart[product.id]} × {money(Number(product.price))}</small></div>
+        <strong>{money(Number(product.price) * cart[product.id])}</strong>
+        <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{cart[product.id]}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={cart[product.id] >= product.stock} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>
+      </article>)}</div> : <p className="auth-description">Seu carrinho está vazio. Adicione uma peça para continuar.</p>}
+      <form className="storefront-checkout-form" onSubmit={(event) => void checkout(event)}>
+        <fieldset><legend>Como deseja receber?</legend>
+          {pickupEnabled && <label className="checkout-choice"><input type="radio" name={`delivery-${store.slug}`} checked={deliveryOption === 'pickup'} onChange={() => { setDeliveryOption('pickup'); setQuote(null) }} /><span><b>Retirar no balcão</b><small>Sem cobrança de frete</small></span></label>}
+          <label className="checkout-choice"><input type="radio" name={`delivery-${store.slug}`} checked={deliveryOption === 'delivery'} onChange={() => { setDeliveryOption('delivery'); setQuote(null) }} /><span><b>Receber por motoboy</b><small>{freeUntilKm > 0 ? `Frete grátis até ${freeUntilKm} km conforme regra da loja; além disso, a taxa é calculada pela rota.` : 'O frete é calculado pela rota e regra de preço da loja.'}</small></span></label>
+        </fieldset>
+        {deliveryOption === 'delivery' && <div className="storefront-delivery-address">
+          {!userId && <p className="auth-description">Entre ou crie sua conta para preencher e guardar seu endereço, sem perder o carrinho.</p>}
+          <div className="auth-form-row">
+            <label>CEP<input required inputMode="numeric" autoComplete="postal-code" maxLength={9} value={address.postal_code} onChange={(event) => updateAddress('postal_code', event.target.value)} onBlur={() => void lookupPostalCode()} /></label>
+            <label>Rua<input required maxLength={160} autoComplete="street-address" value={address.street} onChange={(event) => updateAddress('street', event.target.value)} /></label>
+          </div>
+          <div className="auth-form-row">
+            <label>Número<input required maxLength={30} value={address.number} onChange={(event) => updateAddress('number', event.target.value)} /></label>
+            <label>Complemento<input maxLength={120} value={address.complement} onChange={(event) => updateAddress('complement', event.target.value)} /></label>
+          </div>
+          <div className="auth-form-row">
+            <label>Bairro<input maxLength={120} value={address.district} onChange={(event) => updateAddress('district', event.target.value)} /></label>
+            <label>Cidade<input required maxLength={120} value={address.city} onChange={(event) => updateAddress('city', event.target.value)} /></label>
+            <label>UF<input required maxLength={2} value={address.state} onChange={(event) => updateAddress('state', event.target.value.toUpperCase())} /></label>
+          </div>
+          <button className="auth-button auth-button-secondary" type="button" onClick={() => void calculateCheckoutQuote()} disabled={quoteBusy}>{quoteBusy ? 'Calculando rota…' : 'Calcular frete pelo CEP'}</button>
+          {quote && <div className="delivery-quote-result"><b>{quote.shipping_amount === 0 ? 'Frete grátis' : money(quote.shipping_amount)}</b><span>{quote.distance_km.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km</span><small>A taxa será novamente validada no servidor ao criar o pedido.</small></div>}
+        </div>}
+        <fieldset><legend>Forma de pagamento pelo Asaas</legend>
+          <label className="checkout-choice"><input type="radio" name={`payment-${store.slug}`} checked={paymentMethod === 'pix'} onChange={() => setPaymentMethod('pix')} /><span><b>Pix</b><small>Pagamento na página segura do Asaas</small></span></label>
+          <label className="checkout-choice"><input type="radio" name={`payment-${store.slug}`} checked={paymentMethod === 'card'} onChange={() => setPaymentMethod('card')} /><span><b>Cartão de crédito</b><small>Os dados do cartão são informados somente no Asaas</small></span></label>
+        </fieldset>
+        <div className="storefront-order-summary"><span>Produtos</span><b>{money(subtotal)}</b><span>Frete</span><b>{deliveryOption === 'pickup' ? money(0) : quote ? money(quote.shipping_amount) : 'Calcular pelo CEP'}</b><strong>Total estimado</strong><strong>{money(subtotal + (deliveryOption === 'pickup' ? 0 : quote?.shipping_amount ?? 0))}</strong></div>
+        {checkoutError && <p className="form-message form-error" role="alert">{checkoutError}</p>}
+        <button className="auth-button auth-button-primary storefront-place-order" type="submit" disabled={checkoutBusy || cartProducts.length === 0 || store.status !== 'active'}>{store.status !== 'active' ? 'Pedidos indisponíveis nesta demonstração' : checkoutBusy ? 'Validando estoque e preparando pagamento…' : userId ? 'Validar pedido e pagar no Asaas' : 'Entrar / criar conta para comprar'}</button>
+        <small className="checkout-secure-note">Preço, estoque, frete e total são validados no banco antes de abrir o checkout do Asaas. O pedido só é confirmado após o webhook de pagamento.</small>
+      </form>
+    </section>}
+  </section>
+}
+
 function StorefrontPage({ slug }: { slug: string }) {
   const [store, setStore] = useState<{
     id: string
+    slug: string
     name: string
     logo_url: string | null
+    status: string
     brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[] }
   } | null>(null)
-  const [products, setProducts] = useState<Pick<CatalogProduct, 'id' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]>([])
+  const [products, setProducts] = useState<Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]>([])
+  const [pickupEnabled, setPickupEnabled] = useState(false)
+  const [freeUntilKm, setFreeUntilKm] = useState(0)
   const [masterViewing, setMasterViewing] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -1474,13 +2247,28 @@ function StorefrontPage({ slug }: { slug: string }) {
         setMasterViewing(isMaster)
         setStore(currentStore)
         if (currentStore) {
-          const { data: catalog, error: catalogError } = await client.from('products')
-            .select('id, name, description, price, stock, image_url, compatible_makes, compatible_models, compatible_years, compatible_engines')
+          const [{ data: catalog, error: catalogError }, { data: shippingRules, error: shippingError }] = await Promise.all([
+            client.from('products')
+            .select('id, sku, name, description, price, stock, image_url, compatible_makes, compatible_models, compatible_years, compatible_engines')
             .eq('tenant_id', currentStore.id)
             .eq('is_published', true)
-            .order('name')
+            .order('name'),
+            client.from('shipping_rules').select('pickup_enabled, free_until_km')
+              .eq('tenant_id', currentStore.id).maybeSingle(),
+          ])
           if (catalogError) throw catalogError
-          if (active) setProducts((catalog ?? []) as typeof products)
+          if (shippingError) throw shippingError
+          if (active) {
+            setProducts((catalog ?? []) as typeof products)
+            setPickupEnabled(Boolean(shippingRules?.pickup_enabled))
+            setFreeUntilKm(Number(shippingRules?.free_until_km ?? 0))
+            try {
+              const color = currentStore.brand.primary_color
+              if (color && /^#[\da-f]{6}$/i.test(color)) localStorage.setItem('vancely-store-theme', color)
+            } catch (reason) {
+              console.warn('Unable to persist storefront theme preference', reason)
+            }
+          }
         }
       } catch (reason) {
         if (active) setError(errorText(reason))
@@ -1488,24 +2276,21 @@ function StorefrontPage({ slug }: { slug: string }) {
     })()
     return () => { active = false }
   }, [slug])
-  return <main className="storefront-page">
+  return <main className="storefront-page" style={storeThemeStyle(store?.brand.primary_color)}>
     {masterViewing && store && <MasterViewingBanner tenantName={store.name} />}
-    <section className="storefront-shell" style={{ '--store-color': store?.brand.primary_color ?? '#718c28' } as React.CSSProperties}>
+    <section className="storefront-shell">
       <header className="storefront-heading">
-        {store?.logo_url && <img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} />}
+        {store?.logo_url && <div className="storefront-logo-frame"><img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} /></div>}
         <p className="eyebrow">VITRINE B2C</p>
         {error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></> : <h1>Carregando vitrine…</h1>}
-        <a className="auth-subtle-link" href={masterViewing ? '/admin' : '/login'}>{masterViewing ? 'Voltar à Central Vancely' : 'Acesso da loja'}</a>
+        <nav className="storefront-account-nav">
+          <a className="auth-subtle-link" href={masterViewing ? '/admin' : '/cliente'}>{masterViewing ? 'Voltar à Central Vancely' : 'Minha conta e pedidos'}</a>
+          {!masterViewing && <a className="auth-button auth-button-secondary" href={`/cliente/entrar?next=${encodeURIComponent(`/loja/${slug}?checkout=1`)}`}><UserRound size={15} /> Entrar</a>}
+        </nav>
       </header>
       {store && !error && !!store.brand.promotional_banners?.length && <PromoBannerCarousel banners={store.brand.promotional_banners} />}
-      {store && !error && <section className="storefront-catalog">
-        <div className="portal-panel-heading"><div><p className="eyebrow">CATÁLOGO</p><h2>Produtos disponíveis</h2></div></div>
-        {products.length ? <div className="storefront-products">{products.map((product) => <article key={product.id}>
-          {product.image_url && <img src={product.image_url} alt="" />}
-          <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}{productFitment(product) && <small className="storefront-fitment">{productFitment(product)}</small>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Consulte disponibilidade'}</small></div>
-        </article>)}</div> : <p className="auth-description">Ainda não há produtos publicados para esta loja.</p>}
-        <DeliveryQuotePanel storeId={store.id} />
-      </section>}
+      {store && !error && store.status === 'trial' && <p className="storefront-trial-message">Loja em demonstração: você pode explorar o catálogo, mas pedidos e pagamentos ficam disponíveis após a ativação comercial.</p>}
+      {store && !error && <StorefrontShop store={store} products={products} pickupEnabled={pickupEnabled} freeUntilKm={freeUntilKm} />}
     </section>
   </main>
 }
@@ -1520,83 +2305,6 @@ function PromoBannerCarousel({ banners }: { banners: string[] }) {
       <button type="button" aria-label="Próximo banner" onClick={() => setActiveIndex((index) => (index + 1) % banners.length)}><ArrowRight size={18} /></button>
       <div className="storefront-banner-dots">{banners.map((_, index) => <button key={index} type="button" aria-label={`Exibir banner ${index + 1}`} aria-current={index === currentIndex} onClick={() => setActiveIndex(index)} />)}</div>
     </>}
-  </section>
-}
-
-function DeliveryQuotePanel({ storeId }: { storeId: string }) {
-  const [cep, setCep] = useState('')
-  const [quote, setQuote] = useState<DeliveryQuote | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  async function calculate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setBusy(true)
-    setError('')
-    setQuote(null)
-    try {
-      const destinationCep = cep.replace(/\D/g, '')
-      if (destinationCep.length !== 8) {
-        throw new Error('Informe um CEP de destino válido com 8 dígitos.')
-      }
-      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-      if (!anonKey) {
-        throw new Error('Supabase ainda não está configurado. Preencha VITE_SUPABASE_ANON_KEY.')
-      }
-      const { data, error: quoteError } = await requireSupabase().functions.invoke('quote-delivery', {
-        body: { store_id: storeId, destination_cep: destinationCep },
-        headers: { Authorization: `Bearer ${anonKey}` },
-      })
-      if (quoteError) {
-        if (quoteError.context instanceof Response) {
-          const responseBody = await quoteError.context.clone().json().catch(() => null)
-          if (typeof responseBody?.error === 'string') throw new Error(responseBody.error)
-        }
-        throw quoteError
-      }
-      if (!data || typeof data.shipping_amount !== 'number'
-        || data.geometry?.type !== 'LineString' || !Array.isArray(data.geometry.coordinates)) {
-        throw new Error('O serviço de rotas retornou uma cotação inválida.')
-      }
-      setQuote(data as DeliveryQuote)
-    } catch (reason) {
-      setError(errorText(reason))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return <section className="delivery-quote-panel" aria-labelledby="delivery-quote-title">
-    <div><p className="eyebrow">ENTREGA</p><h3 id="delivery-quote-title"><MapPinned size={17} /> Calcular frete para o seu CEP</h3></div>
-    <form onSubmit={calculate}>
-      <label htmlFor="delivery-destination-cep">CEP de destino</label>
-      <div className="delivery-quote-input">
-        <input
-          id="delivery-destination-cep"
-          inputMode="numeric"
-          autoComplete="postal-code"
-          maxLength={9}
-          pattern="[0-9]{5}-?[0-9]{3}"
-          placeholder="00000-000"
-          required
-          value={cep}
-          onChange={(event) => setCep(event.target.value.replace(/[^\d-]/g, '').slice(0, 9))}
-        />
-        <button className="auth-button auth-button-primary" type="submit" disabled={busy}>
-          {busy ? 'Calculando…' : 'Calcular entrega'}
-        </button>
-      </div>
-    </form>
-    {error && <p className="form-message form-error" role="alert">{error}</p>}
-    {quote && <div className="delivery-quote-result" role="status">
-      <b>{quote.shipping_amount === 0 ? 'Frete grátis' : money(quote.shipping_amount)}</b>
-      <span>{quote.distance_km.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km</span>
-      <span><Clock3 size={14} /> {Math.ceil(quote.duration_seconds / 60)} min estimados</span>
-      <small>{quote.cache_hit ? 'Rota obtida do cache local.' : 'Rota calculada com OSRM e salva no cache local.'}</small>
-      <Suspense fallback={<div className="route-map route-map-loading">Carregando mapa…</div>}>
-        <RouteMap geometry={quote.geometry} />
-      </Suspense>
-    </div>}
   </section>
 }
 
