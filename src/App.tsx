@@ -547,41 +547,44 @@ function PageMessage({ title, message, link, linkText }: { title: string; messag
 }
 
 function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { user: User; portal: Portal; onLogout: () => void; masterPreview?: boolean }) {
+  const [currentPortal, setCurrentPortal] = useState(portal)
   const [supportOpen, setSupportOpen] = useState(false)
   const isStoreTeam = portal.role !== 'courier'
   const canManageSettings = masterPreview || ['owner', 'admin', 'manager'].includes(portal.role)
   return (
     <main className="portal-page">
-      {masterPreview && <MasterViewingBanner tenantName={portal.tenantName} />}
-      <PortalHeader user={user} title={portal.tenantName} onLogout={onLogout} />
-      <section className="portal-content" style={{ '--store-color': portal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
+      {masterPreview && <MasterViewingBanner tenantName={currentPortal.tenantName} />}
+      <PortalHeader user={user} title={currentPortal.tenantName} onLogout={onLogout} />
+      <section className="portal-content" style={{ '--store-color': currentPortal.brand.primary_color ?? '#293125' } as React.CSSProperties}>
         <p className="eyebrow">AMBIENTE DA LOJA · {portal.role.toUpperCase()}</p>
-        <h1>Bem-vindo à {portal.tenantName}</h1>
+        <h1>Bem-vindo à {currentPortal.tenantName}</h1>
         <p className="auth-description">{masterPreview ? 'Sessão Admin Master com visualização e gestão autorizadas desta loja.' : 'O acesso está autenticado e isolado para esta loja.'} Catálogo, frete e saldos são exibidos conforme seu perfil; integrações operacionais dependem das APIs de produção.</p>
         <div className="portal-cards">
-          <article><Store size={20} /><h2>Dados da loja</h2>{portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}<p>Vitrine: <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer">/loja/{portal.slug}</a></p></article>
+          <article><Store size={20} /><h2>Dados da loja</h2>{currentPortal.logoUrl && <img className="tenant-logo-preview" src={currentPortal.logoUrl} alt={`Logomarca ${currentPortal.tenantName}`} />}<p>Vitrine: <a href={`/loja/${currentPortal.slug}`} target="_blank" rel="noreferrer">/loja/{currentPortal.slug}</a></p></article>
           <article><LifeBuoy size={20} /><h2>Suporte</h2><p>Triagem inicial e atendimento humano pela central Vancely.</p><button className="auth-button auth-button-secondary" onClick={() => setSupportOpen(true)}>Abrir suporte</button></article>
           <article><LockKeyhole size={20} /><h2>Integrações</h2><p>Catálogo, pedidos, faturamento e entregas aguardam configuração das APIs correspondentes.</p></article>
         </div>
         <section className="portal-panel">
           <div className="portal-panel-heading"><div><p className="eyebrow">APLICATIVOS DA LOJA</p><h2>Experiências PWA</h2></div><span>Disponíveis na estrutura atual</span></div>
           <div className="pwa-links">
-            <a href={masterPreview ? `/app/${encodeURIComponent(portal.slug)}` : '/app'}><Store size={17} /><span><b>Lojista + vendedor</b><small>{masterPreview ? `/app/${portal.slug}` : '/app · acesso por perfil'}</small></span></a>
-            <a href={masterPreview ? `/driver/${encodeURIComponent(portal.slug)}` : '/entregador'}><Bike size={17} /><span><b>Motoboy</b><small>{masterPreview ? `/driver/${portal.slug}` : '/entregador · acesso por perfil'}</small></span></a>
-            <a href={`/loja/${portal.slug}`} target="_blank" rel="noreferrer"><Store size={17} /><span><b>Cliente</b><small>/loja/{portal.slug}</small></span></a>
+            <a href={masterPreview ? `/app/${encodeURIComponent(currentPortal.slug)}` : '/app'}><Store size={17} /><span><b>Lojista + vendedor</b><small>{masterPreview ? `/app/${currentPortal.slug}` : '/app · acesso por perfil'}</small></span></a>
+            <a href={masterPreview ? `/driver/${encodeURIComponent(currentPortal.slug)}` : '/entregador'}><Bike size={17} /><span><b>Motoboy</b><small>{masterPreview ? `/driver/${currentPortal.slug}` : '/entregador · acesso por perfil'}</small></span></a>
+            <a href={`/loja/${currentPortal.slug}`} target="_blank" rel="noreferrer"><Store size={17} /><span><b>Cliente</b><small>/loja/{currentPortal.slug}</small></span></a>
           </div>
         </section>
-        {isStoreTeam && !masterPreview && <ProductCatalogManager portal={portal} role={portal.role} />}
-        {isStoreTeam && !masterPreview && <TenantCreditPanel portal={portal} />}
-        {canManageSettings && <ShippingSettings portal={portal} readOnly={masterPreview} />}
-        {canManageSettings && <TenantBrandSettings portal={portal} readOnly={masterPreview} />}
+        {isStoreTeam && <ProductCatalogManager portal={currentPortal} role={portal.role} />}
+        {isStoreTeam && !masterPreview && <TenantCreditPanel portal={currentPortal} />}
+        {canManageSettings && <ShippingSettings portal={currentPortal} />}
+        {canManageSettings && <TenantBrandSettings portal={currentPortal} onSaved={(brand, logoUrl) => {
+          setCurrentPortal((current) => ({ ...current, brand, logoUrl }))
+        }} />}
       </section>
-      {supportOpen && <SupportDialog user={user} tenantId={portal.tenantId} onClose={() => setSupportOpen(false)} />}
+      {supportOpen && <SupportDialog user={user} tenantId={currentPortal.tenantId} onClose={() => setSupportOpen(false)} />}
     </main>
   )
 }
 
-function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOnly?: boolean }) {
+function ShippingSettings({ portal }: { portal: Portal }) {
   const [freeUntilKm, setFreeUntilKm] = useState('0')
   const [pricePerKm, setPricePerKm] = useState('2.50')
   const [busy, setBusy] = useState(false)
@@ -658,7 +661,7 @@ function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOn
           value={Math.min(30, Math.max(0, Number(freeUntilKm) || 0))}
           onChange={(event) => setFreeUntilKm(event.target.value)}
           aria-label="Ajustar faixa de entrega grátis em quilômetros"
-          disabled={readOnly || loading}
+          disabled={loading}
         />
         <div className="delivery-range-limits"><span>0 km</span><span>30 km</span></div>
         <input
@@ -670,16 +673,16 @@ function ShippingSettings({ portal, readOnly = false }: { portal: Portal; readOn
           required
           value={freeUntilKm}
           onChange={(event) => setFreeUntilKm(event.target.value)}
-          disabled={readOnly || loading}
+          disabled={loading}
         />
       </div>
       <label className="delivery-setting">Taxa por km adicional (R$)
-        <span className="delivery-currency-input"><span aria-hidden="true">R$</span><input type="number" min="0" max="99999.99" step="0.01" inputMode="decimal" required value={pricePerKm} onChange={(event) => setPricePerKm(event.target.value)} disabled={readOnly || loading} /></span>
+        <span className="delivery-currency-input"><span aria-hidden="true">R$</span><input type="number" min="0" max="99999.99" step="0.01" inputMode="decimal" required value={pricePerKm} onChange={(event) => setPricePerKm(event.target.value)} disabled={loading} /></span>
       </label>
       <p className="image-optimization-note">A cobrança é calculada sobre a distância da rota: km acima da faixa grátis × taxa configurada. A distância precisa vir de um serviço de rotas integrado.</p>
       {error && <p className="form-message form-error" role="alert">{error}</p>}
       {notice && <p className="form-message" role="status">{notice}</p>}
-      {!readOnly && <button className="auth-button auth-button-primary" type="submit" disabled={busy || loading}>{busy ? 'Salvando…' : 'Salvar configuração'}</button>}
+      <button className="auth-button auth-button-primary" type="submit" disabled={busy || loading}>{busy ? 'Salvando…' : 'Salvar configuração'}</button>
     </form>
   </section>
 }
@@ -715,7 +718,7 @@ function TenantCreditPanel({ portal }: { portal: Portal }) {
 }
 
 function ProductCatalogManager({ portal, role }: { portal: Portal; role: string }) {
-  const canDelete = ['owner', 'admin', 'manager'].includes(role)
+  const canDelete = ['owner', 'admin', 'manager', 'admin_master', 'vancely_admin'].includes(role)
   const [products, setProducts] = useState<CatalogProduct[]>([])
   const [editingId, setEditingId] = useState('')
   const [sku, setSku] = useState('')
@@ -862,7 +865,7 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
   </section>
 }
 
-function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; readOnly?: boolean }) {
+function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (brand: Portal['brand'], logoUrl: string | null) => void }) {
   const [appName, setAppName] = useState(portal.brand.app_name ?? portal.tenantName)
   const [primaryColor, setPrimaryColor] = useState(portal.brand.primary_color ?? '#293125')
   const [tagline, setTagline] = useState(portal.brand.tagline ?? '')
@@ -894,7 +897,6 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (readOnly) return
     setBusy(true)
     setError('')
     setNotice('')
@@ -948,6 +950,12 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
       setBanners(updatedBanners)
       setBannerFiles([])
       setLogoFile(null)
+      onSaved({
+        app_name: appName.trim(),
+        primary_color: primaryColor.toLowerCase(),
+        tagline: tagline.trim(),
+        promotional_banners: updatedBanners,
+      }, updatedLogoUrl)
       setNotice('Alterações salvas. A vitrine e o aplicativo do motoboy já estão atualizados.')
     } catch (reason) {
       const saveError = errorText(reason)
@@ -966,7 +974,7 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
     <section className="portal-panel">
       <div className="portal-panel-heading"><div><p className="eyebrow">PERSONALIZAÇÃO WHITE-LABEL</p><h2><Palette size={17} /> Aparência dos aplicativos</h2></div></div>
       <form className="brand-settings-form" onSubmit={save}>
-        <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} disabled={readOnly || busy} /></label>
+        <label>Nome do aplicativo<input required minLength={2} maxLength={60} value={appName} onChange={(event) => setAppName(event.target.value)} disabled={busy} /></label>
         <div className="brand-color-field">
           <span>Cor principal</span>
           <div className="brand-color-swatches" role="group" aria-label="Paleta de cores predefinidas">
@@ -978,17 +986,17 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
               aria-label={`Selecionar cor ${color}`}
               aria-pressed={primaryColor.toLowerCase() === color}
               onClick={() => setPrimaryColor(color)}
-              disabled={readOnly || busy}
+              disabled={busy}
             />)}
           </div>
-          <label className="brand-hex-input">Código hexadecimal<input type="text" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} pattern="^#[0-9A-Fa-f]{6}$" maxLength={7} placeholder="#293125" aria-label="Código hexadecimal da cor principal" disabled={readOnly || busy} /></label>
+          <label className="brand-hex-input">Código hexadecimal<input type="text" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} pattern="^#[0-9A-Fa-f]{6}$" maxLength={7} placeholder="#293125" aria-label="Código hexadecimal da cor principal" disabled={busy} /></label>
         </div>
-        <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={readOnly || busy} /></label>
-        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={readOnly || busy} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small>{(logoPreview || logoUrl) && <img className="brand-logo-preview" src={logoPreview || logoUrl || ''} alt={`Prévia da logomarca de ${portal.tenantName}`} />}</label>
+        <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={busy} /></label>
+        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={busy} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small>{(logoPreview || logoUrl) && <img className="brand-logo-preview" src={logoPreview || logoUrl || ''} alt={`Prévia da logomarca de ${portal.tenantName}`} />}</label>
         <div className="brand-banners">
           <h3>Banners Promocionais da Vitrine</h3>
           <p>Adicione até 5 imagens. Elas serão redimensionadas e convertidas para WebP antes do envio.</p>
-          <label>Selecionar banners<input type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={readOnly || busy || banners.length + bannerFiles.length >= 5} onChange={(event) => {
+          <label>Selecionar banners<input type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={busy || banners.length + bannerFiles.length >= 5} onChange={(event) => {
             const selectedFiles = Array.from(event.currentTarget.files ?? [])
             event.currentTarget.value = ''
             const availableSlots = 5 - banners.length - bannerFiles.length
@@ -1002,20 +1010,20 @@ function TenantBrandSettings({ portal, readOnly = false }: { portal: Portal; rea
           <div className="brand-banner-grid">
             {banners.map((url, index) => <figure key={url}>
               <img src={url} alt={`Banner promocional ${index + 1}`} />
-              {!readOnly && <button type="button" aria-label={`Remover banner ${index + 1}`} disabled={busy} onClick={() => setBanners((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>}
+              <button type="button" aria-label={`Remover banner ${index + 1}`} disabled={busy} onClick={() => setBanners((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>
             </figure>)}
             {bannerFiles.map((file, index) => <figure key={`${file.name}-${index}`}>
               <img src={bannerPreviews[index]} alt={`Prévia do banner ${file.name}`} />
-              {!readOnly && <button type="button" aria-label={`Remover arquivo ${file.name}`} disabled={busy} onClick={() => setBannerFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>}
+              <button type="button" aria-label={`Remover arquivo ${file.name}`} disabled={busy} onClick={() => setBannerFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>
             </figure>)}
           </div>
           <small>{banners.length + bannerFiles.length} de 5 banners selecionados</small>
         </div>
         {error && <p className="form-message form-error" role="alert">{error}</p>}
         {notice && <p className="form-message brand-save-toast" role="status">{notice}</p>}
-        {!readOnly && <button className="auth-button auth-button-primary brand-save-button" type="submit" disabled={busy}>
+        <button className="auth-button auth-button-primary brand-save-button" type="submit" disabled={busy}>
           <Upload size={15} /> {busy ? 'Salvando…' : 'Salvar Alterações'}
-        </button>}
+        </button>
       </form>
     </section>
   )

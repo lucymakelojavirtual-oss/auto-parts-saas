@@ -60,13 +60,15 @@ O painel calcula vendas pagas, entregas, fretes, splits por plano e consultas de
 
 O fluxo de cadastro já cria loja, associação, assinatura e regra de entrega, e as rotas compartilhadas existentes atendem lojista/vendedor (`/app`), motoboy (`/entregador`) e cliente (`/loja/:slug`). A personalização do lojista salva nome, cor, frase e logomarca no bucket `tenant-media` já existente. Aplique também `20261031000001_promotional_storefront_banners.sql` após as migrações anteriores para persistir até cinco banners promocionais e exibi-los na vitrine pública. As imagens dos banners são reduzidas a no máximo 1600 px e convertidas para WebP antes do upload. Não há provisionamento de três instalações PWA independentes nem ícones white-label dinâmicos neste frontend.
 
+A migração `20261031000003_trial_storefront_access.sql` deve ser aplicada depois das migrações anteriores: ela mantém vitrines `trial` acessíveis durante a demonstração, além das lojas `active`. Sem ela, uma definição anterior da RPC pública restringe a vitrine a lojas pagantes/ativas.
+
 Esta base ainda não registra compras de blocos de estoque/NF-e adicionais, custos de chamadas de geocodificação/roteirização ou eventos de cobrança e renovação do gateway; o painel não inventa nem duplica essas receitas. A integração desses módulos exige conexão backend e persistência própria antes de exibir valores reais.
 
 ## Acesso do Admin Master às lojas
 
 Aplique `20261029000000_master_tenant_access.sql` depois da migração de métricas. Ela amplia os helpers RLS já usados pelas políticas de tenant para que a role confiável `admin_master` possa ler e administrar tenants existentes e cria o RPC autenticado `get_master_tenant_by_slug` para abrir uma loja sem trocar a sessão do administrador.
 
-Na Central Vancely, o seletor de lojas e as ações da lista abrem `/app/:slug`, `/driver/:slug` e `/loja/:slug`. As duas primeiras rotas exigem uma sessão com `app_metadata.role` autorizada; a vitrine mantém acesso público apenas a lojas ativas e produtos publicados. Nenhum acesso administrativo é concedido por `user_metadata` ou por e-mail informado pelo navegador: atribua `admin_master` exclusivamente por processo confiável no servidor/Supabase Auth.
+Na Central Vancely, o seletor de lojas e as ações da lista abrem `/app/:slug`, `/driver/:slug` e `/loja/:slug`. As duas primeiras rotas exigem uma sessão com `app_metadata.role` autorizada; a prévia administrativa da loja permite gerenciar catálogo, frete e identidade visual, com as mesmas verificações RLS do Supabase. A vitrine é pública para lojas `active` e `trial` e mostra apenas produtos publicados. Nenhum acesso administrativo é concedido por `user_metadata` ou por e-mail informado pelo navegador: atribua `admin_master` exclusivamente por processo confiável no servidor/Supabase Auth.
 
 ## Integrações pendentes
 
