@@ -21,7 +21,7 @@ type Portal = {
   role: string
   slug: string
   logoUrl: string | null
-  brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[] }
+  brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean }
 }
 type CatalogProduct = {
   id: string
@@ -267,7 +267,7 @@ function productSearchScore(query: string, product: Pick<CatalogProduct, 'name' 
   return average + (phraseMatch ? 25 : 0)
 }
 
-function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88): Promise<Blob> {
+function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, removeWhiteBackground = false): Promise<Blob> {
   return createImageBitmap(file).then((image) => {
     const scale = Math.min(1, maxDimension / Math.max(image.width, image.height))
     const canvas = document.createElement('canvas')
@@ -280,6 +280,47 @@ function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88): Pro
     }
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
     image.close()
+    if (removeWhiteBackground) {
+      const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height)
+      const visited = new Uint8Array(width * height)
+      const queue = new Uint32Array(width * height)
+      let head = 0
+      let tail = 0
+      const isBackground = (pixel: number) => {
+        const offset = pixel * 4
+        const red = data[offset]
+        const green = data[offset + 1]
+        const blue = data[offset + 2]
+        return Math.min(red, green, blue) >= 220 && Math.max(red, green, blue) - Math.min(red, green, blue) <= 30
+      }
+      const enqueue = (pixel: number) => {
+        if (!visited[pixel] && isBackground(pixel)) {
+          visited[pixel] = 1
+          queue[tail++] = pixel
+        }
+      }
+      for (let x = 0; x < width; x += 1) {
+        enqueue(x)
+        enqueue((height - 1) * width + x)
+      }
+      for (let y = 1; y < height - 1; y += 1) {
+        enqueue(y * width)
+        enqueue(y * width + width - 1)
+      }
+      while (head < tail) {
+        const pixel = queue[head++]
+        const offset = pixel * 4
+        const whiteness = (data[offset] + data[offset + 1] + data[offset + 2]) / 3
+        data[offset + 3] = Math.round(data[offset + 3] * Math.max(0, Math.min(1, (245 - whiteness) / 25)))
+        const x = pixel % width
+        const y = Math.floor(pixel / width)
+        if (x > 0) enqueue(pixel - 1)
+        if (x < width - 1) enqueue(pixel + 1)
+        if (y > 0) enqueue(pixel - width)
+        if (y < height - 1) enqueue(pixel + width)
+      }
+      context.putImageData(new ImageData(data, width, height), 0, 0)
+    }
     return new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (blob) resolve(blob)
@@ -1300,6 +1341,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
   const [appName, setAppName] = useState(portal.brand.app_name ?? portal.tenantName)
   const [primaryColor, setPrimaryColor] = useState(portal.brand.primary_color ?? '#293125')
   const [tagline, setTagline] = useState(portal.brand.tagline ?? '')
+  const [showLogoWatermark, setShowLogoWatermark] = useState(portal.brand.show_logo_watermark ?? true)
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoUrl, setLogoUrl] = useState(portal.logoUrl)
   const [logoPreview, setLogoPreview] = useState('')
@@ -1336,7 +1378,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
       const client = requireSupabase()
       let updatedLogoUrl = logoUrl
       if (logoFile) {
-        const image = await convertImageToWebP(logoFile)
+        const image = await convertImageToWebP(logoFile, 800, 0.92, true)
         if (image.size > 5 * 1024 * 1024) {
           throw new Error('A logomarca excede o limite de 5 MB mesmo após a compactação.')
         }
@@ -1374,6 +1416,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
         p_tagline: tagline.trim(),
         p_logo_url: updatedLogoUrl,
         p_banners: updatedBanners,
+        p_show_logo_watermark: showLogoWatermark,
       })
       if (updateError) throw updateError
       uploadedPaths.length = 0
@@ -1386,6 +1429,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
         primary_color: primaryColor.toLowerCase(),
         tagline: tagline.trim(),
         promotional_banners: updatedBanners,
+        show_logo_watermark: showLogoWatermark,
       }, updatedLogoUrl)
       setNotice('Alterações salvas. A vitrine e o aplicativo do motoboy já estão atualizados.')
     } catch (reason) {
@@ -1423,7 +1467,8 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
           <label className="brand-hex-input">Código hexadecimal<input type="text" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} pattern="^#[0-9A-Fa-f]{6}$" maxLength={7} placeholder="#293125" aria-label="Código hexadecimal da cor principal" disabled={busy} /></label>
         </div>
         <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={busy} /></label>
-        <label className="brand-logo-input">Logomarca circular (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={busy} /><small>{logoFile?.name ?? 'A imagem será exibida em formato circular e usada automaticamente como marca d’água na vitrine.'}</small>{(logoPreview || logoUrl) && <img className="brand-logo-preview" src={logoPreview || logoUrl || ''} alt={`Prévia circular da logomarca de ${portal.tenantName}`} />}</label>
+        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={busy} /><small>{logoFile?.name ?? 'O fundo branco conectado às bordas será removido ao enviar a logo.'}</small>{(logoPreview || logoUrl) && <img className="brand-logo-preview" src={logoPreview || logoUrl || ''} alt={`Prévia da logomarca de ${portal.tenantName}`} />}</label>
+        <label className="brand-watermark-toggle"><input type="checkbox" checked={showLogoWatermark} onChange={(event) => setShowLogoWatermark(event.target.checked)} disabled={busy || (!logoPreview && !logoUrl)} /><span><b>Aplicar logo como marca-d’água</b><small>Exibe a logo de forma discreta sobre toda a área da vitrine do cliente.</small></span></label>
         <div className="brand-banners">
           <h3>Banners Promocionais da Vitrine</h3>
           <p>Adicione até 5 imagens. Elas serão redimensionadas e convertidas para WebP antes do envio.</p>
@@ -2054,6 +2099,7 @@ function StorefrontShop({
   const [plate, setPlate] = useState('')
   const [vehicleNotice, setVehicleNotice] = useState('')
   const [vehicleError, setVehicleError] = useState('')
+  const [cartNotice, setCartNotice] = useState('')
   const [searchBusy, setSearchBusy] = useState(false)
   const [checkoutOpen, setCheckoutOpen] = useState(() =>
     new URLSearchParams(window.location.search).get('checkout') === '1'
@@ -2144,7 +2190,7 @@ function StorefrontShop({
   }
 
   function updateCart(product: typeof products[number], change: number) {
-    if (change > 0) setCheckoutOpen(true)
+    if (change > 0) setCartNotice(`${product.name} adicionado ao carrinho.`)
     setCart((current) => {
       const nextQuantity = Math.min(product.stock, Math.max(0, (current[product.id] ?? 0) + change))
       const updated = { ...current }
@@ -2335,8 +2381,9 @@ function StorefrontShop({
   return <section className="storefront-catalog">
     <div className="storefront-shop-heading">
       <div><p className="eyebrow">CATÁLOGO DA LOJA</p><h2>Encontre sua peça</h2><p>Pesquise pelo nome da peça ou filtre pela aplicação do seu veículo.</p></div>
-      <button className="auth-button auth-button-primary storefront-cart-toggle" type="button" aria-expanded={checkoutOpen} onClick={() => setCheckoutOpen((open) => !open)}><ShoppingCart size={16} /> Carrinho ({cartCount})</button>
+      <button className="auth-button auth-button-primary storefront-cart-toggle" type="button" aria-expanded={checkoutOpen} onClick={() => setCheckoutOpen((open) => !open)}><ShoppingCart size={16} /> Ver carrinho ({cartCount})</button>
     </div>
+    {cartNotice && <p className="storefront-cart-notice" role="status">{cartNotice}</p>}
     <div className="storefront-search-panel">
       <form className="storefront-plate-search" onSubmit={(event) => void searchVehicleByPlate(event)}>
         <label><CarFront size={16} /> Buscar aplicação pela placa</label>
@@ -2356,7 +2403,7 @@ function StorefrontShop({
       return <article key={product.id}>
         {product.image_url ? <img src={product.image_url} alt="" /> : <div className="storefront-product-placeholder"><Package size={24} /></div>}
         <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}{productFitment(product) && <small className="storefront-fitment">{productFitment(product)}</small>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Sem estoque disponível'}</small>
-          {quantity === 0 ? <button className="auth-button auth-button-primary storefront-add-button" type="button" disabled={product.stock <= 0} onClick={() => updateCart(product, 1)}><Plus size={15} /> Adicionar</button> : <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{quantity}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={quantity >= product.stock} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>}
+          {quantity === 0 ? <button className="auth-button auth-button-primary storefront-add-button" type="button" disabled={product.stock <= 0} onClick={() => updateCart(product, 1)}><ShoppingCart size={15} /> Adicionar ao carrinho</button> : <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{quantity}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={quantity >= product.stock} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>}
         </div>
       </article>
     })}</div> : <p className="auth-description">{search.trim() ? `Não encontramos peças parecidas com “${search}”. Tente menos palavras ou confira a escrita.` : 'Nenhuma peça encontrada para esses filtros. Ajuste a busca ou pesquise pelo modelo.'}</p>}
@@ -2411,7 +2458,7 @@ function StorefrontPage({ slug }: { slug: string }) {
     name: string
     logo_url: string | null
     status: string
-    brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[] }
+    brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean }
   } | null>(null)
   const [products, setProducts] = useState<Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]>([])
   const [pickupEnabled, setPickupEnabled] = useState(false)
@@ -2473,9 +2520,9 @@ function StorefrontPage({ slug }: { slug: string }) {
   return <main className="storefront-page" style={storeThemeStyle(store?.brand.primary_color)}>
     {masterViewing && store && <MasterViewingBanner tenantName={store.name} />}
     <section className="storefront-shell">
+      {store?.logo_url && store.brand.show_logo_watermark !== false && <img className="storefront-watermark" src={store.logo_url} alt="" aria-hidden="true" />}
       <header className="storefront-heading">
         <div className="storefront-heading-main">
-          {store?.logo_url && <img className="storefront-watermark" src={store.logo_url} alt="" aria-hidden="true" />}
           <div className="storefront-brand">
             {store?.logo_url && <div className="storefront-logo-frame"><img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} /></div>}
             <div>
