@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { ArrowLeft, ArrowRight, Bike, CarFront, ChartNoAxesCombined, LifeBuoy, LockKeyhole, MessageCircle, Minus, Package, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
@@ -80,6 +80,7 @@ type CustomerOrder = {
   delivery_address: Record<string, string> | null
   created_at: string
   asaas_checkout_url: string | null
+  timeline: { status: string; created_at: string }[]
   items: { product_name: string; sku: string; quantity: number; unit_price: number }[]
 }
 type TenantCreditStatus = {
@@ -195,6 +196,75 @@ function productFitment(product: Pick<CatalogProduct, 'compatible_makes' | 'comp
   const engines = product.compatible_engines.join(', ')
   const details = [makes && `Marca: ${makes}`, models && `Modelo: ${models}`, years && `Ano: ${years}`, engines && `Motor: ${engines}`].filter(Boolean)
   return details.join(' · ')
+}
+
+function orderStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    approved: 'Pedido recebido',
+    separating: 'Separando produtos',
+    checking: 'Conferindo pedido',
+    delivery: 'Saiu para entrega',
+    delivered: 'Pedido entregue',
+    cancelled: 'Pedido cancelado',
+  }
+  return labels[status] ?? 'Atualizando pedido'
+}
+
+function normalizeSearchText(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim()
+}
+
+function editDistance(left: string, right: string) {
+  let previousPrevious: number[] | undefined
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index)
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
+    const current = [leftIndex]
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex++) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      )
+      if (previousPrevious && leftIndex > 1 && rightIndex > 1
+        && left[leftIndex - 1] === right[rightIndex - 2]
+        && left[leftIndex - 2] === right[rightIndex - 1]) {
+        current[rightIndex] = Math.min(current[rightIndex], previousPrevious[rightIndex - 2] + 1)
+      }
+    }
+    previousPrevious = previous
+    previous = current
+  }
+  return previous[right.length]
+}
+
+function productSearchScore(query: string, product: Pick<CatalogProduct, 'name' | 'sku' | 'description' | 'compatible_makes' | 'compatible_models' | 'compatible_engines'>) {
+  const normalizedQuery = normalizeSearchText(query)
+  const fields = [product.name, product.sku, product.description ?? '', ...product.compatible_makes, ...product.compatible_models, ...product.compatible_engines]
+    .map(normalizeSearchText)
+    .filter(Boolean)
+  const queryTokens = normalizedQuery.split(/[^a-z0-9]+/).filter(Boolean)
+  if (!queryTokens.length) return 0
+
+  const phraseMatch = fields.some((field) => field.includes(normalizedQuery))
+  const tokenScores = queryTokens.map((token) => {
+    let bestScore = 0
+    for (const field of fields) {
+      for (const target of field.split(/[^a-z0-9]+/).filter(Boolean)) {
+        if (target === token) bestScore = Math.max(bestScore, 100)
+        else if (target.includes(token) || (target.length >= 3 && token.includes(target))) bestScore = Math.max(bestScore, 82)
+        else if (token.length >= 3 && target.length >= 3) {
+          const distance = editDistance(token, target)
+          const tolerance = token.length >= 7 ? 2 : token.length >= 4 ? 1 : 0
+          if (distance <= tolerance) bestScore = Math.max(bestScore, 72 - distance * 10)
+        }
+      }
+    }
+    return bestScore
+  })
+  const matchedTokens = tokenScores.filter((score) => score > 0)
+  if (!matchedTokens.length) return 0
+  const average = tokenScores.reduce((total, score) => total + score, 0) / queryTokens.length
+  return average + (phraseMatch ? 25 : 0)
 }
 
 function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88): Promise<Blob> {
@@ -1353,7 +1423,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
           <label className="brand-hex-input">Código hexadecimal<input type="text" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} pattern="^#[0-9A-Fa-f]{6}$" maxLength={7} placeholder="#293125" aria-label="Código hexadecimal da cor principal" disabled={busy} /></label>
         </div>
         <label>Frase da vitrine<input maxLength={120} value={tagline} onChange={(event) => setTagline(event.target.value)} placeholder="Ex.: Peças certas para seu veículo" disabled={busy} /></label>
-        <label className="brand-logo-input">Logomarca (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={busy} /><small>{logoFile?.name ?? 'A imagem é convertida para WebP e limitada a 800 px de largura.'}</small>{(logoPreview || logoUrl) && <img className="brand-logo-preview" src={logoPreview || logoUrl || ''} alt={`Prévia da logomarca de ${portal.tenantName}`} />}</label>
+        <label className="brand-logo-input">Logomarca circular (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setLogoFile(event.target.files?.[0] ?? null)} disabled={busy} /><small>{logoFile?.name ?? 'A imagem será exibida em formato circular e usada automaticamente como marca d’água na vitrine.'}</small>{(logoPreview || logoUrl) && <img className="brand-logo-preview" src={logoPreview || logoUrl || ''} alt={`Prévia circular da logomarca de ${portal.tenantName}`} />}</label>
         <div className="brand-banners">
           <h3>Banners Promocionais da Vitrine</h3>
           <p>Adicione até 5 imagens. Elas serão redimensionadas e convertidas para WebP antes do envio.</p>
@@ -1565,6 +1635,7 @@ function CustomerAccountPage() {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
+  const ordersRef = useRef<CustomerOrder[]>([])
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -1572,6 +1643,11 @@ function CustomerAccountPage() {
   const [editing, setEditing] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [liveNotice, setLiveNotice] = useState('')
+  const [realtimeState, setRealtimeState] = useState<'connecting' | 'connected' | 'offline'>('connecting')
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  )
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fields, setFields] = useState({
@@ -1593,6 +1669,10 @@ function CustomerAccountPage() {
     : ''
   const returnMessage = new URLSearchParams(window.location.search).get('retorno')
   const returningOrder = new URLSearchParams(window.location.search).get('pedido')
+
+  useEffect(() => {
+    ordersRef.current = orders
+  }, [orders])
 
   useEffect(() => {
     let active = true
@@ -1640,10 +1720,15 @@ function CustomerAccountPage() {
             ? await client.from('order_items').select('order_id, product_name, sku, quantity, unit_price').in('order_id', orderIds)
             : { data: [], error: null }
           if (itemsError) throw itemsError
+          const { data: timelineRows, error: timelineError } = orderIds.length
+            ? await client.from('order_status_events').select('order_id, status, created_at').in('order_id', orderIds).order('created_at', { ascending: true })
+            : { data: [], error: null }
+          if (timelineError) throw timelineError
           if (!active) return
           setOrders(rows.map((order) => ({
             ...order,
             items: (itemRows ?? []).filter((item) => item.order_id === order.id),
+            timeline: (timelineRows ?? []).filter((event) => event.order_id === order.id),
           })) as CustomerOrder[])
           if (nextPath) navigate(nextPath)
         } else {
@@ -1657,6 +1742,59 @@ function CustomerAccountPage() {
     })()
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    if (!user || loading) return
+    const client = requireSupabase()
+    setRealtimeState('connecting')
+    const channel = client.channel(`customer-orders-${user.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'orders',
+        filter: `customer_id=eq.${user.id}`,
+      }, (payload) => {
+        const changed = payload.new as Partial<CustomerOrder> & { id: string }
+        const previous = ordersRef.current.find((order) => order.id === changed.id)
+        if (!previous) return
+        const statusChanged = previous.status !== changed.status
+        const paymentChanged = previous.payment_status !== changed.payment_status
+        if (!statusChanged && !paymentChanged) return
+        const updatedOrder = { ...previous, ...changed }
+        ordersRef.current = ordersRef.current.map((order) => order.id === changed.id ? updatedOrder : order)
+        setOrders(ordersRef.current)
+        const nextStatus = statusChanged && typeof changed.status === 'string' ? orderStatusLabel(changed.status) : 'Pagamento atualizado'
+        const paymentMessage = paymentChanged && changed.payment_status === 'paid' ? 'Pagamento confirmado' : ''
+        const message = `Pedido #${previous.order_number}: ${paymentMessage || nextStatus}.`
+        setLiveNotice(message)
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          try {
+            new Notification('Atualização do seu pedido', { body: message, tag: `order-${changed.id}` })
+          } catch (reason) {
+            setError(`O pedido foi atualizado, mas o navegador não mostrou a notificação: ${errorText(reason)}`)
+          }
+        }
+        void client.from('order_status_events')
+          .select('status, created_at')
+          .eq('order_id', previous.id)
+          .order('created_at', { ascending: true })
+          .then(({ data, error: timelineError }) => {
+            if (timelineError) {
+              setError(`Pedido atualizado, mas não foi possível carregar a linha do tempo: ${errorText(timelineError)}`)
+              return
+            }
+            ordersRef.current = ordersRef.current.map((entry) =>
+              entry.id === previous.id ? { ...entry, timeline: data ?? [] } : entry,
+            )
+            setOrders(ordersRef.current)
+          })
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') setRealtimeState('connected')
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setRealtimeState('offline')
+      })
+    return () => { void client.removeChannel(channel) }
+  }, [user, loading])
 
   function updateField(field: keyof typeof fields, value: string) {
     setFields((current) => ({ ...current, [field]: value }))
@@ -1741,6 +1879,25 @@ function CustomerAccountPage() {
       return
     }
     window.location.reload()
+  }
+
+  async function enableOrderNotifications() {
+    if (typeof Notification === 'undefined') {
+      setNotificationPermission('unsupported')
+      setNotice('Este navegador não oferece notificações do sistema. As atualizações ao vivo continuam disponíveis nesta página.')
+      return
+    }
+    try {
+      const permission = await Notification.requestPermission()
+      setNotificationPermission(permission)
+      setNotice(permission === 'granted'
+        ? 'Notificações ativadas. Avisaremos quando o status dos seus pedidos mudar.'
+        : permission === 'denied'
+          ? 'O navegador bloqueou notificações. Você ainda acompanha as mudanças nesta página.'
+          : 'As notificações não foram ativadas. Você ainda acompanha as mudanças nesta página.')
+    } catch (reason) {
+      setError(`Não foi possível ativar notificações: ${errorText(reason)}`)
+    }
   }
 
   async function cancelPendingOrder(orderId: string) {
@@ -1831,12 +1988,29 @@ function CustomerAccountPage() {
           </form>
         </section>}
         {profile && <section className="portal-panel customer-orders-panel">
-          <div className="portal-panel-heading"><div><p className="eyebrow">HISTÓRICO E GARANTIA</p><h2>Meus pedidos</h2></div><button className="auth-button auth-button-secondary" onClick={() => window.location.reload()}>Atualizar</button></div>
+          <div className="portal-panel-heading">
+            <div><p className="eyebrow">HISTÓRICO E GARANTIA</p><h2>Meus pedidos</h2>
+              <span className={`orders-live-indicator is-${realtimeState}`}><i />{realtimeState === 'connected' ? 'Acompanhamento ao vivo ativo' : realtimeState === 'connecting' ? 'Conectando atualizações ao vivo…' : 'Atualização ao vivo indisponível'}</span>
+            </div>
+            <div className="orders-toolbar">
+              {notificationPermission === 'default' && <button className="auth-button auth-button-secondary" type="button" onClick={() => void enableOrderNotifications()}>Ativar notificações</button>}
+              {notificationPermission === 'granted' && <span className="notification-enabled"><i />Notificações ativadas</span>}
+              <button className="auth-button auth-button-secondary" type="button" onClick={() => window.location.reload()}>Atualizar</button>
+            </div>
+          </div>
+          {(notificationPermission === 'unsupported' || notificationPermission === 'denied') && <small className="orders-notification-note">{notificationPermission === 'denied' ? 'Notificações do sistema foram bloqueadas no navegador; as mudanças de status aparecem nesta página em tempo real.' : 'Este navegador não oferece notificações do sistema; as mudanças de status aparecem aqui em tempo real.'}</small>}
+          {liveNotice && <p className="orders-live-notice" role="status" aria-live="polite">{liveNotice}<button type="button" aria-label="Fechar notificação" onClick={() => setLiveNotice('')}><X size={14} /></button></p>}
+          {realtimeState === 'offline' && <p className="orders-realtime-warning" role="status">Não foi possível manter a conexão ao vivo. Use “Atualizar” para consultar o status mais recente.</p>}
           {orders.length ? <div className="customer-orders-list">{orders.map((order) => <article key={order.id}>
             <div className="customer-order-heading"><div><b>Pedido #{order.order_number}</b><small>{new Date(order.created_at).toLocaleString('pt-BR')} · {order.is_pickup ? 'Retirada no balcão' : 'Entrega por motoboy'}</small></div><span className={`customer-order-status status-${order.payment_status}`}>{order.payment_status === 'paid' ? 'Pagamento confirmado' : order.payment_status === 'failed' ? 'Pagamento não concluído' : order.payment_status === 'refunded' ? 'Estornado' : 'Aguardando pagamento'}</span></div>
             <div className="customer-order-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity}× {item.product_name} ({item.sku})</span>)}</div>
             {order.delivery_address && <small>{order.delivery_address.street}, {order.delivery_address.number} · CEP {order.delivery_address.postal_code}</small>}
-            <div className="customer-order-total"><span>{order.status === 'cancelled' ? 'Pedido cancelado' : order.status === 'delivered' ? 'Entregue' : order.status === 'delivery' ? 'Em entrega' : order.status === 'separating' ? 'Separando produtos' : order.status === 'checking' ? 'Conferindo pedido' : 'Recebido pela loja'}</span><b>Total {money(Number(order.total))}</b></div>
+            <div className="customer-order-total"><span>{orderStatusLabel(order.status)}</span><b>Total {money(Number(order.total))}</b></div>
+            <ol className={`customer-order-timeline${order.status === 'cancelled' ? ' is-cancelled' : ''}`} aria-label={`Acompanhamento do pedido ${order.order_number}`}>
+              {(order.timeline.length ? order.timeline : [{ status: order.status, created_at: order.created_at }]).map((event, index) => <li key={`${order.id}-${event.status}-${event.created_at}-${index}`}>
+                <i /><span><b>{orderStatusLabel(event.status)}</b><small>{new Date(event.created_at).toLocaleString('pt-BR')}</small></span>
+              </li>)}
+            </ol>
             {order.payment_status === 'pending' && order.asaas_checkout_url && <a className="auth-button auth-button-primary" href={order.asaas_checkout_url} target="_blank" rel="noreferrer">Continuar pagamento no Asaas</a>}
             {order.payment_status === 'pending' && !order.asaas_checkout_url && <button className="auth-button auth-button-secondary" type="button" disabled={cancelBusyId === order.id} onClick={() => void cancelPendingOrder(order.id)}>{cancelBusyId === order.id ? 'Cancelando…' : 'Cancelar pedido pendente'}</button>}
           </article>)}</div> : <p className="auth-description">Seus pedidos finalizados aparecerão aqui, com status e número para acompanhamento e garantia.</p>}
@@ -1851,11 +2025,13 @@ function StorefrontShop({
   products,
   pickupEnabled,
   freeUntilKm,
+  search,
 }: {
   store: { id: string; slug: string; status: string }
   products: Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]
   pickupEnabled: boolean
   freeUntilKm: number
+  search: string
 }) {
   const cartStorageKey = `vancely-cart-${store.slug}`
   const [cart, setCart] = useState<Record<string, number>>(() => {
@@ -1872,7 +2048,6 @@ function StorefrontShop({
   })
   const [userId, setUserId] = useState('')
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
-  const [search, setSearch] = useState('')
   const [make, setMake] = useState('')
   const [model, setModel] = useState('')
   const [year, setYear] = useState('')
@@ -1880,7 +2055,10 @@ function StorefrontShop({
   const [vehicleNotice, setVehicleNotice] = useState('')
   const [vehicleError, setVehicleError] = useState('')
   const [searchBusy, setSearchBusy] = useState(false)
-  const [checkoutOpen, setCheckoutOpen] = useState(new URLSearchParams(window.location.search).get('checkout') === '1')
+  const [checkoutOpen, setCheckoutOpen] = useState(() =>
+    new URLSearchParams(window.location.search).get('checkout') === '1'
+      && Object.values(cart).some((quantity) => quantity > 0),
+  )
   const [deliveryOption, setDeliveryOption] = useState<'pickup' | 'delivery'>(pickupEnabled ? 'pickup' : 'delivery')
   const [paymentMethod, setPaymentMethod] = useState<'pix' | 'card'>('pix')
   const [address, setAddress] = useState({
@@ -1890,6 +2068,7 @@ function StorefrontShop({
   const [quoteBusy, setQuoteBusy] = useState(false)
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const [checkoutError, setCheckoutError] = useState('')
+  const checkoutSectionRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     try {
@@ -1934,21 +2113,30 @@ function StorefrontShop({
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    if (!checkoutOpen) return
+    const frame = window.requestAnimationFrame(() => {
+      checkoutSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [checkoutOpen])
+
   const makes = [...new Set(products.flatMap((product) => product.compatible_makes))].sort()
   const models = [...new Set(products.flatMap((product) => product.compatible_models))].sort()
   const years = [...new Set(products.flatMap((product) => product.compatible_years.map(String)))].sort()
   const cartProducts = products.filter((product) => (cart[product.id] ?? 0) > 0)
   const cartCount = cartProducts.reduce((total, product) => total + cart[product.id], 0)
   const subtotal = cartProducts.reduce((total, product) => total + Number(product.price) * cart[product.id], 0)
-  const filteredProducts = products.filter((product) => {
-    const query = search.trim().toLocaleLowerCase('pt-BR')
-    const textMatch = !query || [product.name, product.sku, product.description ?? '']
-      .some((value) => value.toLocaleLowerCase('pt-BR').includes(query))
+  const filteredProducts = products.map((product, index) => ({
+    product,
+    index,
+    score: search.trim() ? productSearchScore(search, product) : 0,
+  })).filter(({ product, score }) => {
     const makeMatch = !make || product.compatible_makes.length === 0 || product.compatible_makes.some((value) => value.toLocaleLowerCase('pt-BR') === make.toLocaleLowerCase('pt-BR'))
     const modelMatch = !model || product.compatible_models.length === 0 || product.compatible_models.some((value) => value.toLocaleLowerCase('pt-BR') === model.toLocaleLowerCase('pt-BR'))
     const yearMatch = !year || product.compatible_years.length === 0 || product.compatible_years.includes(Number(year))
-    return textMatch && makeMatch && modelMatch && yearMatch
-  })
+    return (!search.trim() || score > 0) && makeMatch && modelMatch && yearMatch
+  }).sort((left, right) => right.score - left.score || left.index - right.index).map(({ product }) => product)
 
   function updateAddress(field: keyof typeof address, value: string) {
     setAddress((current) => ({ ...current, [field]: value }))
@@ -1956,6 +2144,7 @@ function StorefrontShop({
   }
 
   function updateCart(product: typeof products[number], change: number) {
+    if (change > 0) setCheckoutOpen(true)
     setCart((current) => {
       const nextQuantity = Math.min(product.stock, Math.max(0, (current[product.id] ?? 0) + change))
       const updated = { ...current }
@@ -2053,6 +2242,10 @@ function StorefrontShop({
       setCheckoutError('Adicione ao menos um produto ao carrinho.')
       return
     }
+    if (deliveryOption === 'delivery' && !quote) {
+      setCheckoutError('Calcule o frete pelo CEP antes de finalizar o pedido.')
+      return
+    }
     if (!userId) {
       navigate(`/cliente/entrar?next=${encodeURIComponent(`/loja/${store.slug}?checkout=1`)}`)
       return
@@ -2142,10 +2335,9 @@ function StorefrontShop({
   return <section className="storefront-catalog">
     <div className="storefront-shop-heading">
       <div><p className="eyebrow">CATÁLOGO DA LOJA</p><h2>Encontre sua peça</h2><p>Pesquise pelo nome da peça ou filtre pela aplicação do seu veículo.</p></div>
-      <button className="auth-button auth-button-primary storefront-cart-toggle" type="button" onClick={() => setCheckoutOpen((open) => !open)}><ShoppingCart size={16} /> Carrinho ({cartCount})</button>
+      <button className="auth-button auth-button-primary storefront-cart-toggle" type="button" aria-expanded={checkoutOpen} onClick={() => setCheckoutOpen((open) => !open)}><ShoppingCart size={16} /> Carrinho ({cartCount})</button>
     </div>
     <div className="storefront-search-panel">
-      <label className="storefront-part-search"><Search size={16} /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar peça, nome ou código SKU" /></label>
       <form className="storefront-plate-search" onSubmit={(event) => void searchVehicleByPlate(event)}>
         <label><CarFront size={16} /> Buscar aplicação pela placa</label>
         <div><input value={plate} maxLength={8} onChange={(event) => setPlate(event.target.value.toUpperCase())} placeholder="ABC1D23" aria-label="Placa do veículo" /><button className="auth-button auth-button-secondary" type="submit" disabled={searchBusy}>{searchBusy ? 'Buscando…' : 'Consultar placa'}</button></div>
@@ -2158,6 +2350,7 @@ function StorefrontShop({
       {vehicleError && <p className="form-message form-error" role="alert">{vehicleError}</p>}
       {vehicleNotice && <p className="form-message" role="status">{vehicleNotice}</p>}
     </div>
+    {search.trim() && filteredProducts.length > 0 && <p className="storefront-search-results" role="status">{filteredProducts.length} {filteredProducts.length === 1 ? 'peça encontrada' : 'peças sugeridas'} para “{search}”, ordenadas por semelhança.</p>}
     {filteredProducts.length ? <div className="storefront-products">{filteredProducts.map((product) => {
       const quantity = cart[product.id] ?? 0
       return <article key={product.id}>
@@ -2166,16 +2359,16 @@ function StorefrontShop({
           {quantity === 0 ? <button className="auth-button auth-button-primary storefront-add-button" type="button" disabled={product.stock <= 0} onClick={() => updateCart(product, 1)}><Plus size={15} /> Adicionar</button> : <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{quantity}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={quantity >= product.stock} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>}
         </div>
       </article>
-    })}</div> : <p className="auth-description">Nenhuma peça encontrada para esses filtros. Ajuste a busca ou pesquise pelo modelo.</p>}
+    })}</div> : <p className="auth-description">{search.trim() ? `Não encontramos peças parecidas com “${search}”. Tente menos palavras ou confira a escrita.` : 'Nenhuma peça encontrada para esses filtros. Ajuste a busca ou pesquise pelo modelo.'}</p>}
 
-    {checkoutOpen && <section className="storefront-checkout" aria-label="Carrinho e finalização da compra">
+    {checkoutOpen && <section ref={checkoutSectionRef} className="storefront-checkout" aria-label="Carrinho e finalização da compra">
       <div className="portal-panel-heading"><div><p className="eyebrow">SEU PEDIDO</p><h2><ShoppingCart size={17} /> Carrinho e entrega</h2></div><button className="icon-button" type="button" aria-label="Fechar carrinho" onClick={() => setCheckoutOpen(false)}><X size={18} /></button></div>
       {cartProducts.length ? <div className="storefront-cart-items">{cartProducts.map((product) => <article key={product.id}>
         <div><b>{product.name}</b><small>{cart[product.id]} × {money(Number(product.price))}</small></div>
         <strong>{money(Number(product.price) * cart[product.id])}</strong>
         <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{cart[product.id]}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={cart[product.id] >= product.stock} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>
-      </article>)}</div> : <p className="auth-description">Seu carrinho está vazio. Adicione uma peça para continuar.</p>}
-      <form className="storefront-checkout-form" onSubmit={(event) => void checkout(event)}>
+      </article>)}</div> : <p className="auth-description">Seu carrinho está vazio. Adicione uma peça para exibir as opções de frete e pagamento.</p>}
+      {cartProducts.length > 0 && <form className="storefront-checkout-form" onSubmit={(event) => void checkout(event)}>
         <fieldset><legend>Como deseja receber?</legend>
           {pickupEnabled && <label className="checkout-choice"><input type="radio" name={`delivery-${store.slug}`} checked={deliveryOption === 'pickup'} onChange={() => { setDeliveryOption('pickup'); setQuote(null) }} /><span><b>Retirar no balcão</b><small>Sem cobrança de frete</small></span></label>}
           <label className="checkout-choice"><input type="radio" name={`delivery-${store.slug}`} checked={deliveryOption === 'delivery'} onChange={() => { setDeliveryOption('delivery'); setQuote(null) }} /><span><b>Receber por motoboy</b><small>{freeUntilKm > 0 ? `Frete grátis até ${freeUntilKm} km conforme regra da loja; além disso, a taxa é calculada pela rota.` : 'O frete é calculado pela rota e regra de preço da loja.'}</small></span></label>
@@ -2206,7 +2399,7 @@ function StorefrontShop({
         {checkoutError && <p className="form-message form-error" role="alert">{checkoutError}</p>}
         <button className="auth-button auth-button-primary storefront-place-order" type="submit" disabled={checkoutBusy || cartProducts.length === 0 || store.status !== 'active'}>{store.status !== 'active' ? 'Pedidos indisponíveis nesta demonstração' : checkoutBusy ? 'Validando estoque e preparando pagamento…' : userId ? 'Validar pedido e pagar no Asaas' : 'Entrar / criar conta para comprar'}</button>
         <small className="checkout-secure-note">Preço, estoque, frete e total são validados no banco antes de abrir o checkout do Asaas. O pedido só é confirmado após o webhook de pagamento.</small>
-      </form>
+      </form>}
     </section>}
   </section>
 }
@@ -2224,6 +2417,7 @@ function StorefrontPage({ slug }: { slug: string }) {
   const [pickupEnabled, setPickupEnabled] = useState(false)
   const [freeUntilKm, setFreeUntilKm] = useState(0)
   const [masterViewing, setMasterViewing] = useState(false)
+  const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
@@ -2280,9 +2474,20 @@ function StorefrontPage({ slug }: { slug: string }) {
     {masterViewing && store && <MasterViewingBanner tenantName={store.name} />}
     <section className="storefront-shell">
       <header className="storefront-heading">
-        {store?.logo_url && <div className="storefront-logo-frame"><img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} /></div>}
-        <p className="eyebrow">VITRINE B2C</p>
-        {error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></> : <h1>Carregando vitrine…</h1>}
+        <div className="storefront-heading-main">
+          {store?.logo_url && <img className="storefront-watermark" src={store.logo_url} alt="" aria-hidden="true" />}
+          <div className="storefront-brand">
+            {store?.logo_url && <div className="storefront-logo-frame"><img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} /></div>}
+            <div>
+              <p className="eyebrow">VITRINE B2C</p>
+              {error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></> : <h1>Carregando vitrine…</h1>}
+            </div>
+          </div>
+          {store && !error && <label className="storefront-header-search">
+            <Search size={19} />
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar peça, modelo ou código SKU" aria-label="Buscar peças por nome, aplicação ou SKU" />
+          </label>}
+        </div>
         <nav className="storefront-account-nav">
           <a className="auth-subtle-link" href={masterViewing ? '/admin' : '/cliente'}>{masterViewing ? 'Voltar à Central Vancely' : 'Minha conta e pedidos'}</a>
           {!masterViewing && <a className="auth-button auth-button-secondary" href={`/cliente/entrar?next=${encodeURIComponent(`/loja/${slug}?checkout=1`)}`}><UserRound size={15} /> Entrar</a>}
@@ -2290,7 +2495,7 @@ function StorefrontPage({ slug }: { slug: string }) {
       </header>
       {store && !error && !!store.brand.promotional_banners?.length && <PromoBannerCarousel banners={store.brand.promotional_banners} />}
       {store && !error && store.status === 'trial' && <p className="storefront-trial-message">Loja em demonstração: você pode explorar o catálogo, mas pedidos e pagamentos ficam disponíveis após a ativação comercial.</p>}
-      {store && !error && <StorefrontShop store={store} products={products} pickupEnabled={pickupEnabled} freeUntilKm={freeUntilKm} />}
+      {store && !error && <StorefrontShop store={store} products={products} pickupEnabled={pickupEnabled} freeUntilKm={freeUntilKm} search={search} />}
     </section>
   </main>
 }

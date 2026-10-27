@@ -48,9 +48,13 @@ Implante a Edge Function (`supabase functions deploy quote-delivery`) após apli
 
 A cotação de entrega acontece dentro do carrinho. O cliente pode escolher retirada quando habilitada pela loja ou entrega por motoboy; a tarifa e o frete grátis por distância são recalculados no banco ao criar o pedido.
 
+Ao adicionar a primeira peça, o carrinho abre automaticamente e mostra as opções de recebimento, frete e pagamento. Com o carrinho vazio, o formulário de entrega não é exibido.
+
 ## Conta do cliente, checkout e pagamentos
 
 Aplique a migração `20261031000005_customer_commerce_and_asaas.sql` depois das migrações anteriores. O cliente pode navegar sem entrar, mas precisa criar conta, confirmar o e-mail e cadastrar CPF/CNPJ, telefone e endereço para concluir a compra. O checkout valida estoque e preços no banco, reserva estoque, cria o pedido e abre o checkout hospedado do Asaas para Pix ou cartão. O pedido só fica pago depois de um evento autenticado do webhook; não use os parâmetros de retorno do navegador como confirmação.
+
+Aplique também `20261031000006_customer_order_realtime.sql` para habilitar as mudanças de pedidos no Supabase Realtime. Na área do cliente, o histórico exibe a linha do tempo de separação, conferência, entrega e pagamento, com aviso dentro da página sempre que houver atualização. O cliente pode autorizar notificações do navegador na própria área de pedidos; essas notificações são exibidas enquanto a página da conta estiver aberta e não substituem notificações push com a PWA fechada.
 
 Configure estes segredos em **Supabase Dashboard → Edge Functions → Secrets**:
 
@@ -68,11 +72,13 @@ supabase functions deploy asaas-checkout-webhook --no-verify-jwt
 
 Mantenha a verificação JWT habilitada em `create-asaas-checkout`. O webhook usa o token próprio do Asaas e precisa ser implantado com `--no-verify-jwt`. No painel Asaas, cadastre a URL `https://<PROJECT_REF>.supabase.co/functions/v1/asaas-checkout-webhook`, configure o mesmo token e habilite `CHECKOUT_CREATED`, `CHECKOUT_PAID`, `CHECKOUT_CANCELED` e `CHECKOUT_EXPIRED`. Cada lojista deve informar o `walletId` Asaas de recebimento em `/app` → configuração de pagamentos; o valor fica protegido no banco e não é exposto na vitrine. A chave da API e o token de webhook nunca devem ser colocados no frontend.
 
-Faça primeiro uma compra de teste completa em sandbox — incluindo entrega/retirada, Pix/cartão, evento de pagamento e cancelamento — antes de habilitar a chave de produção. A comissão é dividida no Checkout do Asaas e o webhook mantém o pedido e o estoque sincronizados. A linha interna de `transactions_split` continua sendo uma estimativa contábil baseada no subtotal bruto; concilie taxas do Asaas e valores líquidos com os relatórios do provedor antes de usar esses números para liquidação financeira.
+Faça primeiro uma compra de teste completa em sandbox — incluindo entrega/retirada, Pix/cartão, evento de pagamento, atualização ao vivo e cancelamento — antes de habilitar a chave de produção. A comissão é dividida no Checkout do Asaas e o webhook mantém o pedido e o estoque sincronizados. A linha interna de `transactions_split` continua sendo uma estimativa contábil baseada no subtotal bruto; concilie taxas do Asaas e valores líquidos com os relatórios do provedor antes de usar esses números para liquidação financeira.
 
 A mesma migração adiciona saldo cumulativo de créditos avulsos de placas e créditos adicionais de NF-e vinculados ao ciclo atual da assinatura. `monthly_plate_limit` é a cota mensal configurável de placas do plano (inicia em zero para não inventar limites comerciais). A cota mensal do plano e o uso de NF-e são renovados pelo período da assinatura existente; os créditos adicionais de NF-e são zerados quando esse período muda. Consultas de placas consomem primeiro a cota mensal e depois o saldo adicional persistente. O RPC `grant_tenant_credits` só pode ser chamado com `service_role`, após confirmação de pagamento server-side, e usa referência de pagamento idempotente. O frontend mostra as cotas e saldos, mas não inicia compras PIX porque esta aplicação ainda não integra um gateway.
 
 O painel `/app` oferece cadastro e edição de produtos para lojistas; vendedores (`staff`) podem cadastrar e editar, mas não excluir nem alterar configurações da loja. As regras equivalentes são aplicadas por RLS. O cadastro inclui marca, modelo, ano e motor compatíveis, custo/preço, estoque mínimo e endereço físico. O recebimento vincula a nota fiscal PDF/XML e registra quantidades previstas e conferidas; o estoque aumenta pela contagem física e fica um histórico fiscal. Arquivos fiscais são mantidos em bucket privado e disponibilizados somente aos membros autorizados da loja. Aplique `20261031000004_inventory_receipts_and_product_fitment.sql` depois das migrações anteriores. Fotos de produtos e logomarcas são reduzidas para no máximo 800 px de largura e convertidas para WebP antes do upload ao bucket `tenant-media`.
+
+A logomarca enviada nas configurações de aparência é exibida em moldura circular e reutilizada automaticamente, com baixa opacidade, como marca d'água no cabeçalho da vitrine.
 
 ## Central Vancely e identidade white-label
 
