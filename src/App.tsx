@@ -2068,15 +2068,15 @@ function CustomerAccountPage() {
 function StorefrontShop({
   store,
   products,
+  catalogLoaded,
   pickupEnabled,
   freeUntilKm,
-  search,
 }: {
   store: { id: string; slug: string; status: string }
   products: Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]
+  catalogLoaded: boolean
   pickupEnabled: boolean
   freeUntilKm: number
-  search: string
 }) {
   const cartStorageKey = `vancely-cart-${store.slug}`
   const [cart, setCart] = useState<Record<string, number>>(() => {
@@ -2097,6 +2097,7 @@ function StorefrontShop({
   const [model, setModel] = useState('')
   const [year, setYear] = useState('')
   const [plate, setPlate] = useState('')
+  const [search, setSearch] = useState('')
   const [vehicleNotice, setVehicleNotice] = useState('')
   const [vehicleError, setVehicleError] = useState('')
   const [cartNotice, setCartNotice] = useState('')
@@ -2115,6 +2116,25 @@ function StorefrontShop({
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const [checkoutError, setCheckoutError] = useState('')
   const checkoutSectionRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (!catalogLoaded) return
+    const availableProducts = new Map(products.map((product) => [product.id, product.stock]))
+    setCart((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current)
+          .flatMap(([id, quantity]) => {
+            const stock = availableProducts.get(id)
+            const maxQuantity = Math.max(stock ?? 0, store.status === 'trial' ? 1 : 0)
+            return maxQuantity > 0 ? [[id, Math.min(quantity, maxQuantity)]] : []
+          }),
+      )
+      return Object.keys(next).length === Object.keys(current).length
+        && Object.entries(next).every(([id, quantity]) => current[id] === quantity)
+        ? current
+        : next
+    })
+  }, [catalogLoaded, products, store.status])
 
   useEffect(() => {
     try {
@@ -2168,8 +2188,14 @@ function StorefrontShop({
   }, [checkoutOpen])
 
   const makes = [...new Set(products.flatMap((product) => product.compatible_makes))].sort()
-  const models = [...new Set(products.flatMap((product) => product.compatible_models))].sort()
-  const years = [...new Set(products.flatMap((product) => product.compatible_years.map(String)))].sort()
+  const vehiclesForMake = make
+    ? products.filter((product) => product.compatible_makes.length === 0 || product.compatible_makes.some((value) => value.toLocaleLowerCase('pt-BR') === make.toLocaleLowerCase('pt-BR')))
+    : products
+  const models = [...new Set(vehiclesForMake.flatMap((product) => product.compatible_models))].sort()
+  const vehiclesForModel = model
+    ? vehiclesForMake.filter((product) => product.compatible_models.length === 0 || product.compatible_models.some((value) => value.toLocaleLowerCase('pt-BR') === model.toLocaleLowerCase('pt-BR')))
+    : vehiclesForMake
+  const years = [...new Set(vehiclesForModel.flatMap((product) => product.compatible_years.map(String)))].sort()
   const cartProducts = products.filter((product) => (cart[product.id] ?? 0) > 0)
   const cartCount = cartProducts.reduce((total, product) => total + cart[product.id], 0)
   const subtotal = cartProducts.reduce((total, product) => total + Number(product.price) * cart[product.id], 0)
@@ -2190,9 +2216,14 @@ function StorefrontShop({
   }
 
   function updateCart(product: typeof products[number], change: number) {
+    if (change > 0 && product.stock <= 0 && store.status !== 'trial') {
+      setCartNotice(`${product.name} está sem estoque e não pode ser adicionado.`)
+      return
+    }
     if (change > 0) setCartNotice(`${product.name} adicionado ao carrinho.`)
     setCart((current) => {
-      const nextQuantity = Math.min(product.stock, Math.max(0, (current[product.id] ?? 0) + change))
+      const maxQuantity = Math.max(product.stock, store.status === 'trial' ? 1 : 0)
+      const nextQuantity = Math.min(maxQuantity, Math.max(0, (current[product.id] ?? 0) + change))
       const updated = { ...current }
       if (nextQuantity === 0) delete updated[product.id]
       else updated[product.id] = nextQuantity
@@ -2385,14 +2416,27 @@ function StorefrontShop({
     </div>
     {cartNotice && <p className="storefront-cart-notice" role="status">{cartNotice}</p>}
     <div className="storefront-search-panel">
+      <label className="storefront-header-search">
+        <Search size={19} />
+        <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar peça, modelo ou código SKU" aria-label="Buscar peças por nome, aplicação ou SKU" />
+      </label>
       <form className="storefront-plate-search" onSubmit={(event) => void searchVehicleByPlate(event)}>
-        <label><CarFront size={16} /> Buscar aplicação pela placa</label>
-        <div><input value={plate} maxLength={8} onChange={(event) => setPlate(event.target.value.toUpperCase())} placeholder="ABC1D23" aria-label="Placa do veículo" /><button className="auth-button auth-button-secondary" type="submit" disabled={searchBusy}>{searchBusy ? 'Buscando…' : 'Consultar placa'}</button></div>
+        <label htmlFor={`storefront-plate-${store.slug}`}><CarFront size={16} /> Buscar peças pela placa</label>
+        <div><input id={`storefront-plate-${store.slug}`} value={plate} maxLength={8} onChange={(event) => setPlate(event.target.value.toUpperCase())} placeholder="ABC1D23" aria-label="Placa do veículo" /><button className="auth-button auth-button-secondary" type="submit" disabled={searchBusy}>{searchBusy ? 'Buscando…' : 'Consultar placa'}</button></div>
       </form>
       <div className="storefront-fitment-search">
-        <label>Marca<select value={make} onChange={(event) => setMake(event.target.value)}><option value="">Todas as marcas</option>{makes.map((value) => <option key={value}>{value}</option>)}</select></label>
-        <label>Modelo<select value={model} onChange={(event) => setModel(event.target.value)}><option value="">Todos os modelos</option>{models.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Marca<select value={make} onChange={(event) => { setMake(event.target.value); setModel(''); setYear('') }}><option value="">Todas as marcas</option>{makes.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Modelo<select value={model} onChange={(event) => { setModel(event.target.value); setYear('') }}><option value="">Todos os modelos</option>{models.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>Ano<select value={year} onChange={(event) => setYear(event.target.value)}><option value="">Todos os anos</option>{years.map((value) => <option key={value}>{value}</option>)}</select></label>
+        {(search || make || model || year || plate) && <button className="storefront-clear-filters" type="button" onClick={() => {
+          setSearch('')
+          setMake('')
+          setModel('')
+          setYear('')
+          setPlate('')
+          setVehicleError('')
+          setVehicleNotice('')
+        }}>Limpar filtros</button>}
       </div>
       {vehicleError && <p className="form-message form-error" role="alert">{vehicleError}</p>}
       {vehicleNotice && <p className="form-message" role="status">{vehicleNotice}</p>}
@@ -2403,10 +2447,10 @@ function StorefrontShop({
       return <article key={product.id}>
         {product.image_url ? <img src={product.image_url} alt="" /> : <div className="storefront-product-placeholder"><Package size={24} /></div>}
         <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}{productFitment(product) && <small className="storefront-fitment">{productFitment(product)}</small>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Sem estoque disponível'}</small>
-          {quantity === 0 ? <button className="auth-button auth-button-primary storefront-add-button" type="button" disabled={product.stock <= 0} onClick={() => updateCart(product, 1)}><ShoppingCart size={15} /> Adicionar ao carrinho</button> : <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{quantity}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={quantity >= product.stock} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>}
+          {quantity === 0 ? <button className="auth-button auth-button-primary storefront-add-button" type="button" disabled={product.stock <= 0 && store.status !== 'trial'} onClick={() => updateCart(product, 1)}><ShoppingCart size={15} /> {product.stock > 0 ? 'Adicionar ao carrinho' : store.status === 'trial' ? 'Adicionar à prévia' : 'Produto esgotado'}</button> : <div className="storefront-quantity"><button type="button" aria-label={`Remover uma unidade de ${product.name}`} onClick={() => updateCart(product, -1)}><Minus size={14} /></button><b>{quantity}</b><button type="button" aria-label={`Adicionar uma unidade de ${product.name}`} disabled={quantity >= Math.max(product.stock, store.status === 'trial' ? 1 : 0)} onClick={() => updateCart(product, 1)}><Plus size={14} /></button></div>}
         </div>
       </article>
-    })}</div> : <p className="auth-description">{search.trim() ? `Não encontramos peças parecidas com “${search}”. Tente menos palavras ou confira a escrita.` : 'Nenhuma peça encontrada para esses filtros. Ajuste a busca ou pesquise pelo modelo.'}</p>}
+    })}</div> : <p className="storefront-empty-state">{!catalogLoaded ? 'Carregando produtos da loja…' : search.trim() ? `Não encontramos peças parecidas com “${search}”. Tente menos palavras ou confira a escrita.` : 'Nenhuma peça encontrada para esses filtros. Ajuste a busca ou pesquise pelo modelo.'}</p>}
 
     {checkoutOpen && <section ref={checkoutSectionRef} className="storefront-checkout" aria-label="Carrinho e finalização da compra">
       <div className="portal-panel-heading"><div><p className="eyebrow">SEU PEDIDO</p><h2><ShoppingCart size={17} /> Carrinho e entrega</h2></div><button className="icon-button" type="button" aria-label="Fechar carrinho" onClick={() => setCheckoutOpen(false)}><X size={18} /></button></div>
@@ -2461,10 +2505,10 @@ function StorefrontPage({ slug }: { slug: string }) {
     brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean }
   } | null>(null)
   const [products, setProducts] = useState<Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]>([])
+  const [catalogLoaded, setCatalogLoaded] = useState(false)
   const [pickupEnabled, setPickupEnabled] = useState(false)
   const [freeUntilKm, setFreeUntilKm] = useState(0)
   const [masterViewing, setMasterViewing] = useState(false)
-  const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
@@ -2501,6 +2545,7 @@ function StorefrontPage({ slug }: { slug: string }) {
           if (shippingError) throw shippingError
           if (active) {
             setProducts((catalog ?? []) as typeof products)
+            setCatalogLoaded(true)
             setPickupEnabled(Boolean(shippingRules?.pickup_enabled))
             setFreeUntilKm(Number(shippingRules?.free_until_km ?? 0))
             try {
@@ -2530,10 +2575,6 @@ function StorefrontPage({ slug }: { slug: string }) {
               {error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></> : <h1>Carregando vitrine…</h1>}
             </div>
           </div>
-          {store && !error && <label className="storefront-header-search">
-            <Search size={19} />
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar peça, modelo ou código SKU" aria-label="Buscar peças por nome, aplicação ou SKU" />
-          </label>}
         </div>
         <nav className="storefront-account-nav">
           <a className="auth-subtle-link" href={masterViewing ? '/admin' : '/cliente'}>{masterViewing ? 'Voltar à Central Vancely' : 'Minha conta e pedidos'}</a>
@@ -2542,7 +2583,7 @@ function StorefrontPage({ slug }: { slug: string }) {
       </header>
       {store && !error && !!store.brand.promotional_banners?.length && <PromoBannerCarousel banners={store.brand.promotional_banners} />}
       {store && !error && store.status === 'trial' && <p className="storefront-trial-message">Loja em demonstração: você pode explorar o catálogo, mas pedidos e pagamentos ficam disponíveis após a ativação comercial.</p>}
-      {store && !error && <StorefrontShop store={store} products={products} pickupEnabled={pickupEnabled} freeUntilKm={freeUntilKm} search={search} />}
+      {store && !error && <StorefrontShop store={store} products={products} catalogLoaded={catalogLoaded} pickupEnabled={pickupEnabled} freeUntilKm={freeUntilKm} />}
     </section>
   </main>
 }
