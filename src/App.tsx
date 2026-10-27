@@ -30,9 +30,30 @@ type CatalogProduct = {
   name: string
   description: string | null
   price: number
+  cost_price: number
   stock: number
+  minimum_stock: number
+  storage_location: string
   image_url: string | null
+  compatible_makes: string[]
+  compatible_models: string[]
+  compatible_years: number[]
+  compatible_engines: string[]
   is_published: boolean
+}
+type InventoryReceipt = {
+  id: string
+  product_id: string
+  invoice_number: string
+  invoice_series: string
+  invoice_access_key: string | null
+  supplier_name: string
+  expected_quantity: number
+  counted_quantity: number
+  unit_cost: number
+  attachment_path: string
+  received_at: string
+  attachment_url: string
 }
 type TenantCreditStatus = {
   period_start: string
@@ -101,6 +122,19 @@ function errorText(error: unknown) {
 function monthDisplayDate(value: string) {
   const [year, month] = value.slice(0, 7).split('-').map(Number)
   return new Date(year, month - 1, 15, 12)
+}
+
+function splitList(value: string) {
+  return value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean)
+}
+
+function productFitment(product: Pick<CatalogProduct, 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>) {
+  const makes = product.compatible_makes.join(', ')
+  const models = product.compatible_models.join(', ')
+  const years = product.compatible_years.join(', ')
+  const engines = product.compatible_engines.join(', ')
+  const details = [makes && `Marca: ${makes}`, models && `Modelo: ${models}`, years && `Ano: ${years}`, engines && `Motor: ${engines}`].filter(Boolean)
+  return details.join(' · ')
 }
 
 function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88): Promise<Blob> {
@@ -725,9 +759,27 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [price, setPrice] = useState('')
+  const [costPrice, setCostPrice] = useState('0')
   const [stock, setStock] = useState('0')
+  const [minimumStock, setMinimumStock] = useState('0')
+  const [storageLocation, setStorageLocation] = useState('')
+  const [compatibleMakes, setCompatibleMakes] = useState('')
+  const [compatibleModels, setCompatibleModels] = useState('')
+  const [compatibleYears, setCompatibleYears] = useState('')
+  const [compatibleEngines, setCompatibleEngines] = useState('')
   const [published, setPublished] = useState(false)
   const [imageFile, setImageFile] = useState<File | null>(null)
+  const [receipts, setReceipts] = useState<InventoryReceipt[]>([])
+  const [receiptProductId, setReceiptProductId] = useState('')
+  const [invoiceNumber, setInvoiceNumber] = useState('')
+  const [invoiceSeries, setInvoiceSeries] = useState('')
+  const [invoiceAccessKey, setInvoiceAccessKey] = useState('')
+  const [supplierName, setSupplierName] = useState('')
+  const [expectedQuantity, setExpectedQuantity] = useState('1')
+  const [countedQuantity, setCountedQuantity] = useState('1')
+  const [receiptUnitCost, setReceiptUnitCost] = useState('')
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null)
+  const [receiptBusy, setReceiptBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -735,15 +787,33 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
 
   async function loadProducts() {
     const { data, error: loadError } = await requireSupabase().from('products')
-      .select('id, sku, name, description, price, stock, image_url, is_published')
+      .select('id, sku, name, description, price, cost_price, stock, minimum_stock, storage_location, image_url, compatible_makes, compatible_models, compatible_years, compatible_engines, is_published')
       .eq('tenant_id', portal.tenantId).order('name')
     if (loadError) throw loadError
     setProducts((data ?? []) as CatalogProduct[])
   }
 
+  async function loadReceipts() {
+    const client = requireSupabase()
+    const { data, error: receiptError } = await client.from('inventory_receipts')
+      .select('id, product_id, invoice_number, invoice_series, invoice_access_key, supplier_name, expected_quantity, counted_quantity, unit_cost, attachment_path, received_at')
+      .eq('tenant_id', portal.tenantId)
+      .order('received_at', { ascending: false })
+      .limit(20)
+    if (receiptError) throw receiptError
+    const signedReceipts = await Promise.all((data ?? []).map(async (receipt) => {
+      const { data: signedFile, error: signedFileError } = await client.storage
+        .from('tenant-invoices').createSignedUrl(receipt.attachment_path, 3600)
+      if (signedFileError) throw signedFileError
+      return { ...receipt, attachment_url: signedFile.signedUrl }
+    }))
+    setReceipts(signedReceipts as InventoryReceipt[])
+  }
+
   useEffect(() => {
     let active = true
-    void loadProducts().catch((reason) => { if (active) setError(errorText(reason)) })
+    void Promise.all([loadProducts(), loadReceipts()])
+      .catch((reason) => { if (active) setError(errorText(reason)) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [portal.tenantId])
@@ -754,7 +824,14 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
     setName(product.name)
     setDescription(product.description ?? '')
     setPrice(String(product.price))
+    setCostPrice(String(product.cost_price))
     setStock(String(product.stock))
+    setMinimumStock(String(product.minimum_stock))
+    setStorageLocation(product.storage_location)
+    setCompatibleMakes(product.compatible_makes.join(', '))
+    setCompatibleModels(product.compatible_models.join(', '))
+    setCompatibleYears(product.compatible_years.join(', '))
+    setCompatibleEngines(product.compatible_engines.join(', '))
     setPublished(product.is_published)
     setImageFile(null)
     setNotice('')
@@ -767,7 +844,14 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
     setName('')
     setDescription('')
     setPrice('')
+    setCostPrice('0')
     setStock('0')
+    setMinimumStock('0')
+    setStorageLocation('')
+    setCompatibleMakes('')
+    setCompatibleModels('')
+    setCompatibleYears('')
+    setCompatibleEngines('')
     setPublished(false)
     setImageFile(null)
   }
@@ -780,13 +864,30 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
     try {
       const client = requireSupabase()
       const productId = editingId || crypto.randomUUID()
+      const years = splitList(compatibleYears).map(Number)
+      if (years.some((year) => !Number.isInteger(year) || year < 1950 || year > 2100)) {
+        throw new Error('Informe os anos de aplicação entre 1950 e 2100, separados por vírgula.')
+      }
+      if (![price, costPrice].every((value) => value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0)) {
+        throw new Error('Informe valores válidos e não negativos para preço de venda e custo.')
+      }
+      if (![stock, minimumStock].every((value) => value.trim() && Number.isInteger(Number(value)) && Number(value) >= 0)) {
+        throw new Error('Estoque atual e mínimo devem ser números inteiros não negativos.')
+      }
       const productValues = {
         tenant_id: portal.tenantId,
         sku: sku.trim(),
         name: name.trim(),
         description: description.trim() || null,
         price: Number(price),
+        cost_price: Number(costPrice),
         stock: Number(stock),
+        minimum_stock: Number(minimumStock),
+        storage_location: storageLocation.trim(),
+        compatible_makes: splitList(compatibleMakes),
+        compatible_models: splitList(compatibleModels),
+        compatible_years: years,
+        compatible_engines: splitList(compatibleEngines),
         is_published: published,
       }
       const saveResult = editingId
@@ -817,7 +918,96 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
     }
   }
 
+  function clearReceiptForm() {
+    setReceiptProductId('')
+    setInvoiceNumber('')
+    setInvoiceSeries('')
+    setInvoiceAccessKey('')
+    setSupplierName('')
+    setExpectedQuantity('1')
+    setCountedQuantity('1')
+    setReceiptUnitCost('')
+    setInvoiceFile(null)
+  }
+
+  async function saveReceipt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setReceiptBusy(true)
+    setError('')
+    setNotice('')
+    let uploadedPath = ''
+    let receiptRegistered = false
+    try {
+      if (!receiptProductId || !invoiceFile) {
+        throw new Error('Selecione o produto e anexe o arquivo PDF ou XML da nota fiscal.')
+      }
+      const extension = invoiceFile.name.split('.').pop()?.toLowerCase()
+      if (extension !== 'pdf' && extension !== 'xml') {
+        throw new Error('A nota fiscal deve estar em arquivo PDF ou XML.')
+      }
+      if (invoiceFile.size > 15 * 1024 * 1024) {
+        throw new Error('O arquivo da nota fiscal deve ter no máximo 15 MB.')
+      }
+      const expected = Number(expectedQuantity)
+      const counted = Number(countedQuantity)
+      const cost = Number(receiptUnitCost)
+      if (!Number.isInteger(expected) || expected < 1 || !Number.isInteger(counted) || counted < 0) {
+        throw new Error('Informe quantidades inteiras válidas para a nota e a conferência física.')
+      }
+      if (!Number.isFinite(cost) || cost < 0) {
+        throw new Error('Informe um custo unitário válido, igual ou maior que zero.')
+      }
+      if (invoiceAccessKey.trim() && !/^\d{44}$/.test(invoiceAccessKey.trim())) {
+        throw new Error('A chave de acesso da NF-e deve conter 44 dígitos.')
+      }
+
+      const client = requireSupabase()
+      const receiptId = crypto.randomUUID()
+      uploadedPath = `${portal.tenantId}/${receiptId}.${extension}`
+      const { error: uploadError } = await client.storage.from('tenant-invoices').upload(uploadedPath, invoiceFile, {
+        contentType: extension === 'pdf' ? 'application/pdf' : 'application/xml',
+        upsert: false,
+      })
+      if (uploadError) throw uploadError
+      const { error: registerError } = await client.rpc('register_inventory_receipt', {
+        p_receipt_id: receiptId,
+        p_tenant_id: portal.tenantId,
+        p_product_id: receiptProductId,
+        p_invoice_number: invoiceNumber.trim(),
+        p_invoice_series: invoiceSeries.trim(),
+        p_invoice_access_key: invoiceAccessKey.trim() || null,
+        p_supplier_name: supplierName.trim(),
+        p_expected_quantity: expected,
+        p_counted_quantity: counted,
+        p_unit_cost: cost,
+        p_attachment_path: uploadedPath,
+      })
+      if (registerError) throw registerError
+      receiptRegistered = true
+      uploadedPath = ''
+      clearReceiptForm()
+      setNotice('Recebimento registrado. O estoque foi atualizado pela quantidade conferida.')
+      await Promise.all([loadProducts(), loadReceipts()])
+    } catch (reason) {
+      const message = errorText(reason)
+      if (receiptRegistered) {
+        setError(`Recebimento registrado, mas não foi possível atualizar a tela: ${message}`)
+      } else if (uploadedPath) {
+        const { error: cleanupError } = await requireSupabase().storage.from('tenant-invoices').remove([uploadedPath])
+        setError(cleanupError ? `${message} Não foi possível remover o anexo não registrado: ${cleanupError.message}` : message)
+      } else {
+        setError(message)
+      }
+    } finally {
+      setReceiptBusy(false)
+    }
+  }
+
   async function deleteProduct(product: CatalogProduct) {
+    if (receipts.some((receipt) => receipt.product_id === product.id)) {
+      setError('Este produto possui recebimentos fiscais registrados e não pode ser excluído para preservar o histórico.')
+      return
+    }
     if (!window.confirm(`Excluir o produto "${product.name}"?`)) return
     setError('')
     setNotice('')
@@ -842,8 +1032,25 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
       </div>
       <label>Descrição<textarea maxLength={2000} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
       <div className="auth-form-row">
-        <label>Preço (R$)<input type="number" min="0" step="0.01" required value={price} onChange={(event) => setPrice(event.target.value)} /></label>
-        <label>Estoque<input type="number" min="0" step="1" required value={stock} onChange={(event) => setStock(event.target.value)} /></label>
+        <label>Preço de venda (R$)<input type="number" min="0" step="0.01" required value={price} onChange={(event) => setPrice(event.target.value)} /></label>
+        <label>Custo unitário (R$)<input type="number" min="0" step="0.01" required value={costPrice} onChange={(event) => setCostPrice(event.target.value)} /></label>
+      </div>
+      <div className="auth-form-row">
+        <label>Estoque atual<input type="number" min="0" step="1" required value={stock} onChange={(event) => setStock(event.target.value)} /></label>
+        <label>Estoque mínimo<input type="number" min="0" step="1" required value={minimumStock} onChange={(event) => setMinimumStock(event.target.value)} /></label>
+      </div>
+      <label>Endereço físico / prateleira<input maxLength={120} value={storageLocation} onChange={(event) => setStorageLocation(event.target.value)} placeholder="Ex.: Corredor A · Estante 02 · Prateleira 3" /></label>
+      <div className="inventory-fitment-fields">
+        <h3>Aplicação veicular</h3>
+        <p>Informe uma ou mais opções separadas por vírgula. Ex.: Toyota; Corolla; 2018, 2019; 1.8 Flex.</p>
+        <div className="auth-form-row">
+          <label>Marca(s)<input maxLength={500} value={compatibleMakes} onChange={(event) => setCompatibleMakes(event.target.value)} placeholder="Toyota, Honda" /></label>
+          <label>Modelo(s)<input maxLength={500} value={compatibleModels} onChange={(event) => setCompatibleModels(event.target.value)} placeholder="Corolla, Civic" /></label>
+        </div>
+        <div className="auth-form-row">
+          <label>Ano(s) do modelo<input maxLength={500} value={compatibleYears} onChange={(event) => setCompatibleYears(event.target.value)} placeholder="2018, 2019, 2020" /></label>
+          <label>Motor(es)<input maxLength={500} value={compatibleEngines} onChange={(event) => setCompatibleEngines(event.target.value)} placeholder="1.8 Flex, 2.0" /></label>
+        </div>
       </div>
       <label className="auth-checkbox"><input type="checkbox" checked={published} onChange={(event) => setPublished(event.target.checked)} /> Publicar na vitrine</label>
       <label>Foto da peça (PNG, JPEG ou WebP)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /><small>{imageFile?.name ?? 'A imagem será redimensionada e convertida para WebP antes do envio.'}</small></label>
@@ -857,10 +1064,45 @@ function ProductCatalogManager({ portal, role }: { portal: Portal; role: string 
     <div className="product-admin-list">
       {loading ? <p className="auth-description">Carregando produtos…</p> : products.length ? products.map((product) => <article key={product.id}>
         {product.image_url ? <img src={product.image_url} alt="" /> : <Package size={20} />}
-        <div><b>{product.name}</b><small>{product.sku} · {money(Number(product.price))} · estoque {product.stock} · {product.is_published ? 'publicado' : 'rascunho'}</small></div>
+        <div><b>{product.name}</b><small>{product.sku} · venda {money(Number(product.price))} · custo {money(Number(product.cost_price))} · estoque {product.stock}/{product.minimum_stock} mín. · {product.storage_location || 'sem endereço'} · {product.is_published ? 'publicado' : 'rascunho'}</small>{product.stock <= product.minimum_stock && product.minimum_stock > 0 && <span className="stock-warning">Estoque no mínimo ou abaixo</span>}{productFitment(product) && <small>{productFitment(product)}</small>}</div>
         <button className="auth-button auth-button-secondary" type="button" onClick={() => editProduct(product)}>Editar</button>
         {canDelete && <button className="product-delete-button" type="button" aria-label={`Excluir ${product.name}`} onClick={() => void deleteProduct(product)}><Trash2 size={16} /></button>}
       </article>) : <p className="auth-description">Nenhum produto cadastrado.</p>}
+    </div>
+    <div className="inventory-receipt">
+      <div className="portal-panel-heading"><div><p className="eyebrow">ENTRADA DE ESTOQUE</p><h3>Conferência física e nota fiscal</h3></div><span>O estoque aumenta pela quantidade conferida</span></div>
+      <form className="inventory-receipt-form" onSubmit={saveReceipt}>
+        <label>Produto<select required value={receiptProductId} onChange={(event) => {
+          setReceiptProductId(event.target.value)
+          const selectedProduct = products.find((product) => product.id === event.target.value)
+          if (selectedProduct) setReceiptUnitCost(String(selectedProduct.cost_price))
+        }}><option value="">Selecione o produto</option>{products.map((product) => <option key={product.id} value={product.id}>{product.sku} · {product.name}</option>)}</select></label>
+        <div className="auth-form-row">
+          <label>Número da NF-e<input required maxLength={50} value={invoiceNumber} onChange={(event) => setInvoiceNumber(event.target.value)} /></label>
+          <label>Série<input maxLength={20} value={invoiceSeries} onChange={(event) => setInvoiceSeries(event.target.value)} /></label>
+        </div>
+        <label>Chave de acesso da NF-e (44 dígitos)<input inputMode="numeric" maxLength={44} value={invoiceAccessKey} onChange={(event) => setInvoiceAccessKey(event.target.value.replace(/\D/g, '').slice(0, 44))} /></label>
+        <label>Fornecedor<input maxLength={160} value={supplierName} onChange={(event) => setSupplierName(event.target.value)} /></label>
+        <div className="auth-form-row">
+          <label>Quantidade na nota<input type="number" min="1" step="1" required value={expectedQuantity} onChange={(event) => setExpectedQuantity(event.target.value)} /></label>
+          <label>Quantidade conferida<input type="number" min="0" step="1" required value={countedQuantity} onChange={(event) => setCountedQuantity(event.target.value)} /></label>
+        </div>
+        <label>Custo unitário conferido (R$)<input type="number" min="0" step="0.01" required value={receiptUnitCost} onChange={(event) => setReceiptUnitCost(event.target.value)} /></label>
+        <label>Nota fiscal (PDF ou XML, até 15 MB)<input type="file" accept=".pdf,.xml,application/pdf,application/xml,text/xml" required onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)} /><small>{invoiceFile?.name ?? 'O documento fica em armazenamento privado da loja.'}</small></label>
+        {error && <p className="form-message form-error" role="alert">{error}</p>}
+        {notice && <p className="form-message" role="status">{notice}</p>}
+        <button className="auth-button auth-button-primary" type="submit" disabled={receiptBusy || products.length === 0}>{receiptBusy ? 'Registrando recebimento…' : 'Conferir e adicionar ao estoque'}</button>
+      </form>
+      <div className="inventory-receipt-history">
+        <h3>Últimos recebimentos</h3>
+        {loading ? <p className="auth-description">Carregando recebimentos…</p> : receipts.length ? receipts.map((receipt) => {
+          const product = products.find((item) => item.id === receipt.product_id)
+          return <article key={receipt.id}>
+            <div><b>{product?.name ?? 'Produto'}</b><small>NF {receipt.invoice_number}{receipt.invoice_series && ` · série ${receipt.invoice_series}`} · previsto {receipt.expected_quantity} · conferido {receipt.counted_quantity} · {new Date(receipt.received_at).toLocaleString('pt-BR')}</small></div>
+            <a className="auth-button auth-button-secondary" href={receipt.attachment_url} target="_blank" rel="noreferrer">Abrir NF-e</a>
+          </article>
+        }) : <p className="auth-description">Nenhum recebimento registrado.</p>}
+      </div>
     </div>
   </section>
 }
@@ -1207,7 +1449,7 @@ function StorefrontPage({ slug }: { slug: string }) {
     logo_url: string | null
     brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[] }
   } | null>(null)
-  const [products, setProducts] = useState<{ id: string; name: string; description: string | null; price: number; stock: number; image_url: string | null }[]>([])
+  const [products, setProducts] = useState<Pick<CatalogProduct, 'id' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]>([])
   const [masterViewing, setMasterViewing] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -1233,7 +1475,7 @@ function StorefrontPage({ slug }: { slug: string }) {
         setStore(currentStore)
         if (currentStore) {
           const { data: catalog, error: catalogError } = await client.from('products')
-            .select('id, name, description, price, stock, image_url')
+            .select('id, name, description, price, stock, image_url, compatible_makes, compatible_models, compatible_years, compatible_engines')
             .eq('tenant_id', currentStore.id)
             .eq('is_published', true)
             .order('name')
@@ -1260,7 +1502,7 @@ function StorefrontPage({ slug }: { slug: string }) {
         <div className="portal-panel-heading"><div><p className="eyebrow">CATÁLOGO</p><h2>Produtos disponíveis</h2></div></div>
         {products.length ? <div className="storefront-products">{products.map((product) => <article key={product.id}>
           {product.image_url && <img src={product.image_url} alt="" />}
-          <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Consulte disponibilidade'}</small></div>
+          <div><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}{productFitment(product) && <small className="storefront-fitment">{productFitment(product)}</small>}<b>{money(Number(product.price))}</b><small>{product.stock > 0 ? `${product.stock} em estoque` : 'Consulte disponibilidade'}</small></div>
         </article>)}</div> : <p className="auth-description">Ainda não há produtos publicados para esta loja.</p>}
         <DeliveryQuotePanel storeId={store.id} />
       </section>}

@@ -50,7 +50,7 @@ A vitrine permite cotar a entrega por CEP. Ainda não existe fluxo de carrinho/f
 
 A mesma migração adiciona saldo cumulativo de créditos avulsos de placas e créditos adicionais de NF-e vinculados ao ciclo atual da assinatura. `monthly_plate_limit` é a cota mensal configurável de placas do plano (inicia em zero para não inventar limites comerciais). A cota mensal do plano e o uso de NF-e são renovados pelo período da assinatura existente; os créditos adicionais de NF-e são zerados quando esse período muda. Consultas de placas consomem primeiro a cota mensal e depois o saldo adicional persistente. O RPC `grant_tenant_credits` só pode ser chamado com `service_role`, após confirmação de pagamento server-side, e usa referência de pagamento idempotente. O frontend mostra as cotas e saldos, mas não inicia compras PIX porque esta aplicação ainda não integra um gateway.
 
-O painel `/app` agora oferece cadastro, edição e exclusão de produtos para lojistas; vendedores (`staff`) podem cadastrar e editar, mas não excluir nem alterar configurações da loja. As regras equivalentes são aplicadas por RLS. Fotos de produtos e logomarcas são reduzidas para no máximo 800 px de largura e convertidas para WebP antes do upload ao bucket `tenant-media`.
+O painel `/app` oferece cadastro e edição de produtos para lojistas; vendedores (`staff`) podem cadastrar e editar, mas não excluir nem alterar configurações da loja. As regras equivalentes são aplicadas por RLS. O cadastro inclui marca, modelo, ano e motor compatíveis, custo/preço, estoque mínimo e endereço físico. O recebimento vincula a nota fiscal PDF/XML e registra quantidades previstas e conferidas; o estoque aumenta pela contagem física e fica um histórico fiscal. Arquivos fiscais são mantidos em bucket privado e disponibilizados somente aos membros autorizados da loja. Aplique `20261031000004_inventory_receipts_and_product_fitment.sql` depois das migrações anteriores. Fotos de produtos e logomarcas são reduzidas para no máximo 800 px de largura e convertidas para WebP antes do upload ao bucket `tenant-media`.
 
 ## Central Vancely e identidade white-label
 
@@ -72,7 +72,7 @@ Na Central Vancely, o seletor de lojas e as ações da lista abrem `/app/:slug`,
 
 ## Integrações pendentes
 
-As integrações Focus NFe, API de placas/cache e pagamentos ainda dependem de backend. A cotação de rota da vitrine usa a Edge Function `quote-delivery` e a tabela `delivery_routes_cache`; criação de pedidos e processamento de pagamentos continuam pendentes.
+As integrações Focus NFe, API de placas/cache e pagamentos ainda dependem de backend. O cadastro de recebimento fiscal é manual e registra os dados informados e o anexo XML/PDF; ele não importa automaticamente XML, valida a NF-e na SEFAZ nem substitui emissão/integração Focus NFe. A cotação de rota da vitrine usa a Edge Function `quote-delivery` e a tabela `delivery_routes_cache`; criação de pedidos e processamento de pagamentos continuam pendentes.
 
 ## Verificação
 
