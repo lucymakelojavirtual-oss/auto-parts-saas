@@ -1541,6 +1541,77 @@ function PortalHeader({
   }}><option value="">Selecione uma loja…</option>{tenantOptions.map((tenant) => <option key={tenant.id} value={tenant.slug}>{tenant.name}</option>)}</select></label>}<div><small>{user.email}</small><button className="auth-button auth-button-secondary" onClick={onLogout}>Sair</button></div></header>
 }
 
+function MasterAdminProfile({ user }: { user: User }) {
+  const [document, setDocument] = useState('')
+  const [postalCode, setPostalCode] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const { data, error: queryError } = await requireSupabase().from('master_admin_profiles')
+          .select('document, postal_code').eq('user_id', user.id).maybeSingle()
+        if (queryError) throw queryError
+        if (active && data) {
+          setDocument(data.document)
+          setPostalCode(data.postal_code)
+        }
+      } catch (reason) {
+        if (active) setError(errorText(reason))
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [user.id])
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    setNotice('')
+    if (!isValidBrDocument(document)) {
+      setError('Informe um CPF válido.')
+      return
+    }
+    if (!/^\d{8}$/.test(postalCode)) {
+      setError('Informe um CEP válido com 8 dígitos.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      const { error: saveError } = await requireSupabase().from('master_admin_profiles').upsert({
+        user_id: user.id,
+        document,
+        postal_code: postalCode,
+      }, { onConflict: 'user_id' })
+      if (saveError) throw saveError
+      setNotice('Dados do Admin Master salvos com segurança.')
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="portal-panel master-admin-profile">
+    <div className="portal-panel-heading"><div><p className="eyebrow">DADOS DO ADMIN</p><h2>Perfil do Admin Master</h2></div></div>
+    <form className="auth-form" onSubmit={(event) => void saveProfile(event)}>
+      <div className="auth-form-row">
+        <label>CPF<input inputMode="numeric" autoComplete="off" maxLength={11} value={document} onChange={(event) => setDocument(event.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="11 dígitos" disabled={loading || busy} required /></label>
+        <label>CEP<input inputMode="numeric" autoComplete="postal-code" maxLength={8} value={postalCode} onChange={(event) => setPostalCode(event.target.value.replace(/\D/g, '').slice(0, 8))} placeholder="8 dígitos" disabled={loading || busy} required /></label>
+      </div>
+      {error && <p className="form-message form-error" role="alert">{error}</p>}
+      {notice && <p className="form-message" role="status">{notice}</p>}
+      <button className="auth-button auth-button-primary" type="submit" disabled={loading || busy}>{loading ? 'Carregando…' : busy ? 'Salvando…' : 'Salvar dados'}</button>
+    </form>
+  </section>
+}
+
 function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [dashboard, setDashboard] = useState<MasterDashboardData | null>(null)
   const [error, setError] = useState('')
@@ -1584,6 +1655,7 @@ function AdminDashboard({ user, onLogout }: { user: User; onLogout: () => void }
         <p className="eyebrow">ADMINISTRAÇÃO SAAS</p>
         <h1>Central Vancely</h1>
         <p className="auth-description">Acesso administrativo verificado pelo perfil seguro do Supabase Auth.</p>
+        <MasterAdminProfile user={user} />
         <div className="admin-heading-actions">
           <span>{dashboard ? `Atualizado ${new Date(dashboard.generated_at).toLocaleTimeString('pt-BR')}` : 'Painel de métricas'}</span>
           <button className="auth-button auth-button-secondary" onClick={() => void loadAnalytics()} disabled={loading}><RefreshCw size={15} /> Atualizar</button>
