@@ -1623,12 +1623,16 @@ function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user
 
   useEffect(() => {
     let active = true
-    void requireSupabase().from('tenants').select('address').eq('id', portal.tenantId).single()
-      .then(({ data, error: queryError }) => {
+    void (async () => {
+      try {
+        const { data, error: queryError } = await requireSupabase().from('tenants')
+          .select('address').eq('id', portal.tenantId).single()
         if (queryError) throw queryError
         if (active) setStoreAddress(data.address as Record<string, unknown>)
-      })
-      .catch((reason) => { if (active) setError(errorText(reason)) })
+      } catch (reason) {
+        if (active) setError(errorText(reason))
+      }
+    })()
     return () => { active = false }
   }, [portal.tenantId])
 
