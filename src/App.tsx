@@ -2709,9 +2709,18 @@ function StorefrontPage({ slug }: { slug: string }) {
 
 function PromoBannerCarousel({ banners }: { banners: string[] }) {
   const [activeIndex, setActiveIndex] = useState(0)
+  const [isHovered, setIsHovered] = useState(false)
   const currentIndex = activeIndex % banners.length
-  return <section className="storefront-banner-carousel" aria-label="Ofertas e banners promocionais">
-    <img src={banners[currentIndex]} alt={`Oferta promocional ${currentIndex + 1}`} />
+  useEffect(() => {
+    if (banners.length < 2 || isHovered) return
+    const timer = window.setInterval(() => {
+      setActiveIndex((index) => (index + 1) % banners.length)
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [banners.length, isHovered, currentIndex])
+
+  return <section className="storefront-banner-carousel" aria-label="Ofertas e banners promocionais" aria-roledescription="carrossel" onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
+    <img key={currentIndex} src={banners[currentIndex]} alt={`Oferta promocional ${currentIndex + 1}`} />
     {banners.length > 1 && <>
       <button type="button" aria-label="Banner anterior" onClick={() => setActiveIndex((index) => (index - 1 + banners.length) % banners.length)}><ArrowLeft size={18} /></button>
       <button type="button" aria-label="Próximo banner" onClick={() => setActiveIndex((index) => (index + 1) % banners.length)}><ArrowRight size={18} /></button>
