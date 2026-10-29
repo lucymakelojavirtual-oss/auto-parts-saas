@@ -410,6 +410,69 @@ td:first-child > small { display: block; margin-top: 4px; color: #999e95; font-s
 .courier-tip > span { color: #819345; }
 .courier-tip b { color: #515d3f; font-size: 10px; }
 .courier-tip p { margin: 4px 0 0; color: #818977; font-size: 9px; line-height: 1.5; }
+.courier-workflow-page { max-width: 1180px; }
+.courier-workflow-heading, .courier-section-heading, .courier-delivery-card > header, .courier-confirm-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.courier-workflow-heading h1 { margin: 6px 0; font: 700 25px/1.2 'Manrope', sans-serif; }
+.courier-workflow-heading .auth-description { margin: 0; }
+.courier-realtime-state { display: inline-flex; align-items: center; gap: 7px; color: #687064; font-size: 10px; }
+.courier-realtime-state i { width: 7px; height: 7px; border-radius: 50%; background: #d9a13b; }
+.courier-realtime-state.connected i { background: #27945b; box-shadow: 0 0 0 3px #27945b22; }
+.courier-realtime-state.offline i { background: #c4513d; }
+.courier-workflow-stats { display: flex; align-items: center; gap: 9px; margin: 18px 0; }
+.courier-workflow-stats article { min-width: 140px; display: grid; gap: 4px; padding: 10px 13px; border: 1px solid #e8ebe4; border-radius: 6px; background: white; }
+.courier-workflow-stats article span { color: #858b82; font-size: 9px; }
+.courier-workflow-stats article b { color: #30362d; font: 700 17px 'Manrope', sans-serif; }
+.courier-workflow-stats > button { margin-left: auto; }
+.courier-delivery-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; margin-top: 20px; }
+.courier-delivery-columns > section { min-width: 0; display: grid; align-content: start; gap: 10px; }
+.courier-section-heading { padding-bottom: 8px; border-bottom: 1px solid #e7eae3; }
+.courier-section-heading h2 { margin: 0; color: #30362d; font: 700 14px 'Manrope', sans-serif; }
+.courier-section-heading > span { min-width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: #eef3e4; color: #526a2b; font-size: 9px; font-weight: 700; }
+.courier-delivery-card { min-width: 0; display: grid; gap: 13px; padding: 15px; border: 1px solid #e6e9e1; border-top: 3px solid var(--store-color, #536d36); border-radius: 6px; background: white; box-shadow: 0 3px 12px #20241f08; }
+.courier-delivery-card > header { align-items: flex-start; }
+.courier-delivery-card .eyebrow { margin-bottom: 5px; }
+.courier-delivery-card h3 { margin: 0; color: #30362d; font: 700 15px 'Manrope', sans-serif; }
+.courier-payment-status { padding: 5px 8px; border-radius: 20px; background: #fff3e1; color: #8a5d19; font-size: 8px; font-weight: 700; white-space: nowrap; }
+.courier-payment-status.is-paid { background: #edf5df; color: #4c741f; }
+.courier-delivery-facts { display: flex; flex-wrap: wrap; gap: 7px 15px; color: #777f72; font-size: 9px; }
+.courier-delivery-facts span { display: grid; gap: 3px; }
+.courier-delivery-facts b { color: #343a32; font-size: 10px; }
+.courier-collection-hint { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 9px; border-radius: 4px; background: #fff8eb; color: #775a2c; font-size: 9px; line-height: 1.4; }
+.courier-collection-hint svg { flex: 0 0 auto; }
+.courier-address-grid { display: grid; gap: 8px; }
+.courier-address-grid > section { min-width: 0; display: grid; gap: 5px; padding: 10px; border: 1px solid #edf0e9; border-radius: 5px; }
+.courier-address-grid > section > small { display: flex; align-items: center; gap: 5px; color: #7d8578; font: 500 8px 'DM Mono', monospace; }
+.courier-address-grid > section > b { color: #30362d; font-size: 10px; }
+.courier-address-grid > section > p { margin: 0; color: #6d7569; font-size: 9px; line-height: 1.45; }
+.courier-address-grid > section > div { display: flex; gap: 12px; }
+.courier-address-grid a { display: inline-flex; align-items: center; gap: 4px; color: var(--store-color, #536d36); font-size: 8px; font-weight: 700; text-decoration: none; }
+.courier-items-check { display: grid; gap: 7px; }
+.courier-items-check h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 1px; color: #424a3e; font-size: 10px; }
+.courier-items-check > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #434a3e; font-size: 9px; }
+.courier-items-check > div > span { display: grid; gap: 2px; }
+.courier-items-check small { color: #969c93; font-size: 8px; }
+.courier-action-button { width: 100%; min-height: 40px; }
+.courier-empty-state { margin: 0; padding: 20px 14px; border: 1px dashed #dfe3da; border-radius: 5px; color: #858b82; background: #fff; font-size: 10px; text-align: center; }
+.courier-success-notice { padding: 10px 12px; border: 1px solid #d5e8c5; border-radius: 5px; background: #f3faed; color: #3e6322; font-size: 10px; }
+.courier-preview-note { padding: 10px 12px; border-radius: 5px; background: #fff8eb; color: #775a2c; font-size: 10px; }
+.courier-back-link { display: inline-block; margin-top: 20px; }
+.courier-confirm-backdrop { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 16px; background: #17201780; }
+.courier-confirm-dialog { width: min(520px, 100%); max-height: min(90dvh, 760px); overflow: auto; display: grid; gap: 14px; padding: 20px; border: 1px solid #e7eae3; border-radius: 8px; background: white; box-shadow: 0 20px 60px #101a1030; }
+.courier-confirm-dialog > header { padding-bottom: 12px; border-bottom: 1px solid #e9ece5; }
+.courier-confirm-dialog > header .eyebrow { margin-bottom: 5px; }
+.courier-confirm-dialog h2 { margin: 0; color: #30362d; font: 700 17px 'Manrope', sans-serif; }
+.courier-confirm-address { margin: 0; color: #666e62; font-size: 10px; line-height: 1.5; }
+.courier-paid-note { margin: 0; padding: 10px; border-radius: 4px; background: #edf5df; color: #4c741f; font-size: 10px; }
+.courier-collection-fields, .courier-note-field { display: grid; gap: 8px; }
+.courier-collection-fields label, .courier-note-field { color: #434a3e; font-size: 10px; font-weight: 600; }
+.courier-collection-fields input, .courier-collection-fields select, .courier-note-field textarea { width: 100%; min-height: 38px; padding: 9px 10px; border: 1px solid #dfe3d9; border-radius: 5px; background: white; color: #252b23; font: inherit; }
+.courier-collection-fields small { color: #858b82; font-size: 9px; line-height: 1.45; }
+.courier-note-field textarea { resize: vertical; }
+.courier-proof-field { min-height: 40px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; border: 1px dashed #dfe3d9; border-radius: 5px; color: #596350; font-size: 10px; cursor: pointer; }
+.courier-proof-field input { width: 100%; color: #727a70; font: inherit; font-size: 9px; }
+.courier-proof-field small { width: 100%; color: #4c741f; }
+.courier-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.courier-confirm-actions .auth-button { min-height: 40px; }
 .nav-scrim { display: none; }
 
 @keyframes rise-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
@@ -559,6 +622,17 @@ td:first-child > small { display: block; margin-top: 4px; color: #999e95; font-s
   .ride-footer .button { width: 100%; margin: 5px 0 0; }
   .courier-side { grid-template-columns: 1fr; }
   .courier-order-title { align-items: flex-start; flex-direction: column; }
+  .courier-workflow-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .courier-workflow-heading h1 { font-size: 21px; }
+  .courier-workflow-stats { flex-wrap: wrap; }
+  .courier-workflow-stats article { min-width: 0; flex: 1; padding: 9px; }
+  .courier-workflow-stats > button { flex-basis: 100%; margin-left: 0; }
+  .courier-delivery-columns { grid-template-columns: 1fr; gap: 20px; }
+  .courier-delivery-card { padding: 12px; }
+  .courier-confirm-backdrop { padding: 0; }
+  .courier-confirm-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; padding: 18px 14px; border-radius: 0; }
+  .courier-confirm-actions { flex-direction: column-reverse; }
+  .courier-confirm-actions .auth-button { width: 100%; }
   .cart-drawer { padding: 18px 15px; }
 }
 

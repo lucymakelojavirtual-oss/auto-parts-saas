@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, Bike, CarFront, ChartNoAxesCombined, CreditCard, Flame, LifeBuoy, LockKeyhole, MessageCircle, Minus, Package, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShieldCheck, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Banknote, Bike, Camera, CarFront, ChartNoAxesCombined, CircleCheck, CreditCard, ExternalLink, Flame, LifeBuoy, LockKeyhole, MapPin, MessageCircle, Minus, Package, PackageCheck, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShieldCheck, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X, Zap } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
 
@@ -1550,20 +1550,223 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
   )
 }
 
+type CourierDeliveryOrder = {
+  id: string
+  order_number: number
+  status: string
+  payment_method: string
+  payment_status: string
+  subtotal: number
+  shipping_amount: number
+  total: number
+  delivery_address: Record<string, unknown> | null
+  customer_snapshot: Record<string, unknown>
+  courier_id: string | null
+  is_pickup: boolean
+  created_at: string
+  order_items: { product_name: string; sku: string; quantity: number }[]
+}
+
+function courierAddressLabel(address: Record<string, unknown> | null) {
+  if (!address) return 'Endereço não informado'
+  const value = (key: string) => typeof address[key] === 'string' ? address[key] as string : ''
+  const street = [value('street'), value('number')].filter(Boolean).join(', ')
+  const area = [value('district'), [value('city'), value('state')].filter(Boolean).join(' - ')].filter(Boolean).join(' · ')
+  return [street, area, value('postal_code')].filter(Boolean).join(' · ') || 'Endereço não informado'
+}
+
+function courierMapLinks(address: Record<string, unknown> | null) {
+  const query = encodeURIComponent(courierAddressLabel(address))
+  return {
+    google: `https://www.google.com/maps/search/?api=1&query=${query}`,
+    waze: `https://waze.com/ul?q=${query}&navigate=yes`,
+  }
+}
+
 function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user: User; portal: Portal; onLogout: () => void; masterPreview?: boolean }) {
-  return (
-    <main className="portal-page" style={storeThemeStyle(portal.brand.primary_color)}>
-      {masterPreview && <MasterViewingBanner tenantName={portal.tenantName} />}
-      <PortalHeader user={user} title={`Entregas · ${portal.tenantName}`} onLogout={onLogout} />
-      <section className="portal-content">
-        <p className="eyebrow">PWA DO ENTREGADOR</p>
-        {portal.logoUrl && <img className="tenant-logo-preview" src={portal.logoUrl} alt={`Logomarca ${portal.tenantName}`} />}
-        <h1>Olá, {user.user_metadata?.full_name ?? user.email}</h1>
-        <p className="auth-description">{portal.brand.tagline || `Você está autenticado como entregador da ${portal.tenantName}.`} Corridas e carteira serão exibidas quando a integração de pedidos e entregas estiver disponível.</p>
-        <a className="auth-subtle-link" href={masterPreview ? `/app/${encodeURIComponent(portal.slug)}` : '/app'}>Acessar ambiente da loja</a>
-      </section>
-    </main>
-  )
+  const [orders, setOrders] = useState<CourierDeliveryOrder[]>([])
+  const [storeAddress, setStoreAddress] = useState<Record<string, unknown> | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [realtimeState, setRealtimeState] = useState<'connecting' | 'connected' | 'offline'>('connecting')
+  const [busyOrderId, setBusyOrderId] = useState('')
+  const [activeOrder, setActiveOrder] = useState<CourierDeliveryOrder | null>(null)
+  const [note, setNote] = useState('')
+  const [amountReceived, setAmountReceived] = useState('')
+  const [collectionMethod, setCollectionMethod] = useState<'' | 'cash' | 'card' | 'pix'>('')
+  const [proofFile, setProofFile] = useState<File | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    void (async () => {
+      try {
+        const { data, error: queryError } = await requireSupabase().from('orders')
+          .select('id, order_number, status, payment_method, payment_status, subtotal, shipping_amount, total, delivery_address, customer_snapshot, courier_id, is_pickup, created_at, order_items(product_name, sku, quantity)')
+          .eq('tenant_id', portal.tenantId)
+          .eq('is_pickup', false)
+          .in('status', ['approved', 'separating', 'checking', 'delivery'])
+          .or(`courier_id.is.null,courier_id.eq.${user.id}`)
+          .order('created_at', { ascending: true })
+        if (queryError) throw queryError
+        if (active) setOrders((data ?? []) as unknown as CourierDeliveryOrder[])
+      } catch (reason) {
+        if (active) setError(errorText(reason))
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [portal.tenantId, user.id, refreshKey])
+
+  useEffect(() => {
+    let active = true
+    void requireSupabase().from('tenants').select('address').eq('id', portal.tenantId).single()
+      .then(({ data, error: queryError }) => {
+        if (queryError) throw queryError
+        if (active) setStoreAddress(data.address as Record<string, unknown>)
+      })
+      .catch((reason) => { if (active) setError(errorText(reason)) })
+    return () => { active = false }
+  }, [portal.tenantId])
+
+  useEffect(() => {
+    const client = requireSupabase()
+    const channel = client.channel(`courier-orders-${portal.tenantId}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'orders', filter: `tenant_id=eq.${portal.tenantId}`,
+      }, () => setRefreshKey((current) => current + 1))
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') setRealtimeState('connected')
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setRealtimeState('offline')
+      })
+    return () => { void client.removeChannel(channel) }
+  }, [portal.tenantId])
+
+  const availableOrders = orders.filter((order) => !order.courier_id)
+  const activeOrders = orders.filter((order) => order.courier_id === user.id && order.status === 'delivery')
+  const originLinks = courierMapLinks(storeAddress)
+
+  async function acceptOrder(order: CourierDeliveryOrder) {
+    setBusyOrderId(order.id)
+    setError('')
+    setNotice('')
+    try {
+      const { error: acceptError } = await requireSupabase().rpc('accept_delivery', { p_order_id: order.id })
+      if (acceptError) throw acceptError
+      setNotice(`Pedido #${order.order_number} atribuído à sua rota.`)
+      setRefreshKey((current) => current + 1)
+    } catch (reason) {
+      setError(errorText(reason))
+    } finally {
+      setBusyOrderId('')
+    }
+  }
+
+  function openCompletion(order: CourierDeliveryOrder) {
+    setActiveOrder(order)
+    setNote('')
+    setAmountReceived(order.payment_status === 'paid' ? '' : Number(order.total).toFixed(2))
+    setCollectionMethod('')
+    setProofFile(null)
+    setError('')
+  }
+
+  async function completeOrder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!activeOrder) return
+    setBusyOrderId(activeOrder.id)
+    setError('')
+    let uploadedPath = ''
+    try {
+      const numericAmount = Number(amountReceived.replace(',', '.')) || 0
+      if (numericAmount > 0 && !collectionMethod) throw new Error('Selecione como o valor foi recebido.')
+      if (activeOrder.payment_status !== 'paid' && Math.round(numericAmount * 100) !== Math.round(Number(activeOrder.total) * 100)) {
+        throw new Error(`Para concluir este pedido, registre o recebimento integral de ${money(Number(activeOrder.total))}.`)
+      }
+      if (proofFile && (proofFile.size > 5 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(proofFile.type))) {
+        throw new Error('A foto deve ser JPG, PNG ou WebP e ter no máximo 5 MB.')
+      }
+      const client = requireSupabase()
+      if (proofFile) {
+        const extension = proofFile.type === 'image/png' ? 'png' : proofFile.type === 'image/webp' ? 'webp' : 'jpg'
+        uploadedPath = `tenants/${portal.tenantId}/delivery-proofs/${activeOrder.id}/${crypto.randomUUID()}.${extension}`
+        const { error: uploadError } = await client.storage.from('delivery-proofs').upload(uploadedPath, proofFile, {
+          contentType: proofFile.type,
+          cacheControl: '3600',
+          upsert: false,
+        })
+        if (uploadError) throw uploadError
+      }
+      const { error: completionError } = await client.rpc('complete_delivery', {
+        p_order_id: activeOrder.id,
+        p_note: note.trim(),
+        p_amount_received: numericAmount,
+        p_payment_method: numericAmount > 0 ? collectionMethod : null,
+        p_proof_path: uploadedPath || null,
+      })
+      if (completionError) throw completionError
+      setActiveOrder(null)
+      setNotice(`Entrega do pedido #${activeOrder.order_number} concluída.`)
+      setRefreshKey((current) => current + 1)
+    } catch (reason) {
+      const message = errorText(reason)
+      if (uploadedPath) {
+        const { error: cleanupError } = await requireSupabase().storage.from('delivery-proofs').remove([uploadedPath])
+        setError(cleanupError ? `${message} Não foi possível remover a foto enviada sem concluir a entrega: ${cleanupError.message}` : message)
+      } else {
+        setError(message)
+      }
+    } finally {
+      setBusyOrderId('')
+    }
+  }
+
+  function deliveryCard(order: CourierDeliveryOrder, assigned: boolean) {
+    const destinationLinks = courierMapLinks(order.delivery_address)
+    const customerName = typeof order.customer_snapshot.full_name === 'string' ? order.customer_snapshot.full_name : 'Cliente'
+    return <article className="courier-delivery-card" key={order.id}>
+      <header><div><p className="eyebrow">{assigned ? 'SUA ROTA' : 'PRONTO PARA COLETA'}</p><h3>Pedido #{order.order_number}</h3></div><span className={`courier-payment-status ${order.payment_status === 'paid' ? 'is-paid' : ''}`}>{order.payment_status === 'paid' ? 'Pago via Asaas' : 'Pagamento pendente'}</span></header>
+      <div className="courier-delivery-facts"><span>Frete <b>{money(Number(order.shipping_amount))}</b></span><span>Pagamento <b>{order.payment_method === 'pix' ? 'Pix' : order.payment_method === 'card' ? 'Cartão' : order.payment_method}</b></span><span>Total <b>{money(Number(order.total))}</b></span></div>
+      {order.payment_status !== 'paid' && <p className="courier-collection-hint"><Banknote size={15} /> Se receber algum valor na entrega, registre na confirmação. O status Asaas não será alterado pelo PWA.</p>}
+      <div className="courier-address-grid">
+        <section><small><MapPin size={14} /> ORIGEM · LOJA</small><b>{portal.tenantName}</b><p>{courierAddressLabel(storeAddress)}</p><div><a href={originLinks.google} target="_blank" rel="noreferrer">Google Maps <ExternalLink size={12} /></a><a href={originLinks.waze} target="_blank" rel="noreferrer">Waze <ExternalLink size={12} /></a></div></section>
+        <section><small><MapPin size={14} /> DESTINO · {customerName.toLocaleUpperCase('pt-BR')}</small><p>{courierAddressLabel(order.delivery_address)}</p><div><a href={destinationLinks.google} target="_blank" rel="noreferrer">Google Maps <ExternalLink size={12} /></a><a href={destinationLinks.waze} target="_blank" rel="noreferrer">Waze <ExternalLink size={12} /></a></div></section>
+      </div>
+      <section className="courier-items-check"><h4><PackageCheck size={16} /> Conferência de peças</h4>{order.order_items.map((item) => <div key={`${item.sku}-${item.product_name}`}><span>{item.product_name}<small>SKU {item.sku}</small></span><b>× {item.quantity}</b></div>)}</section>
+      {assigned ? <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id} onClick={() => openCompletion(order)}><CircleCheck size={16} /> Concluir entrega</button> : <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id || masterPreview} onClick={() => void acceptOrder(order)}><Bike size={16} /> {busyOrderId === order.id ? 'Atribuindo…' : 'Aceitar / Retirar na loja'}</button>}
+    </article>
+  }
+
+  return <main className="portal-page" style={storeThemeStyle(portal.brand.primary_color)}>
+    {masterPreview && <MasterViewingBanner tenantName={portal.tenantName} />}
+    <PortalHeader user={user} title={`Entregas · ${portal.tenantName}`} onLogout={onLogout} />
+    <section className="portal-content courier-workflow-page">
+      <div className="courier-workflow-heading"><div><p className="eyebrow">PWA DO ENTREGADOR</p><h1>Olá, {user.user_metadata?.full_name ?? user.email}</h1><p className="auth-description">Fila e rotas de entrega da {portal.tenantName}.</p></div><span className={`courier-realtime-state ${realtimeState}`}><i /> {realtimeState === 'connected' ? 'Ao vivo' : realtimeState === 'offline' ? 'Reconectando' : 'Conectando'}</span></div>
+      {!masterPreview && <div className="courier-workflow-stats"><article><span>Disponíveis</span><b>{availableOrders.length}</b></article><article><span>Na sua rota</span><b>{activeOrders.length}</b></article><button type="button" className="auth-button auth-button-secondary" onClick={() => setRefreshKey((current) => current + 1)} disabled={loading}><RefreshCw size={15} /> Atualizar</button></div>}
+      {error && <p className="form-message form-error" role="alert">{error}</p>}
+      {notice && <p className="form-message courier-success-notice" role="status">{notice}</p>}
+      {masterPreview && <p className="courier-preview-note">Visualização administrativa: ações de entrega ficam desativadas.</p>}
+      {loading ? <p className="auth-description">Carregando pedidos de entrega…</p> : <div className="courier-delivery-columns">
+        <section><div className="courier-section-heading"><h2>Minha rota</h2><span>{activeOrders.length}</span></div>{activeOrders.length ? activeOrders.map((order) => deliveryCard(order, true)) : <p className="courier-empty-state">Você ainda não tem entregas em andamento.</p>}</section>
+        <section><div className="courier-section-heading"><h2>Fila de coleta</h2><span>{availableOrders.length}</span></div>{availableOrders.length ? availableOrders.map((order) => deliveryCard(order, false)) : <p className="courier-empty-state">Não há pedidos prontos para coleta neste momento.</p>}</section>
+      </div>}
+      <a className="auth-subtle-link courier-back-link" href={masterPreview ? `/app/${encodeURIComponent(portal.slug)}` : '/app'}>Acessar ambiente da loja</a>
+    </section>
+    {activeOrder && <div className="courier-confirm-backdrop" onClick={() => { if (!busyOrderId) setActiveOrder(null) }}>
+      <form className="courier-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="courier-confirm-title" onSubmit={(event) => void completeOrder(event)} onClick={(event) => event.stopPropagation()}>
+        <header><div><p className="eyebrow">BAIXA DA ROTA</p><h2 id="courier-confirm-title">Concluir pedido #{activeOrder.order_number}</h2></div><button type="button" className="icon-button" aria-label="Fechar confirmação" disabled={Boolean(busyOrderId)} onClick={() => setActiveOrder(null)}><X size={18} /></button></header>
+        <p className="courier-confirm-address">{courierAddressLabel(activeOrder.delivery_address)}</p>
+        {activeOrder.payment_status === 'paid' ? <p className="courier-paid-note">Pagamento já confirmado pelo Asaas. Não registre nova cobrança na entrega.</p> : <div className="courier-collection-fields"><label>Valor recebido na entrega (total: {money(Number(activeOrder.total))})<input inputMode="decimal" value={amountReceived} onChange={(event) => setAmountReceived(event.target.value)} placeholder="0,00" /></label>{Number(amountReceived.replace(',', '.')) > 0 && <label>Forma de recebimento<select required value={collectionMethod} onChange={(event) => setCollectionMethod(event.target.value as typeof collectionMethod)}><option value="">Selecione…</option><option value="cash">Dinheiro</option><option value="card">Cartão</option><option value="pix">Pix</option></select></label>}<small>O status de pagamento do Asaas permanece inalterado; este valor fica registrado como recebimento na entrega.</small></div>}
+        <label className="courier-note-field">Observação<textarea maxLength={1000} rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Ex.: entregue na recepção da oficina" /></label>
+        <label className="courier-proof-field"><Camera size={16} /> Foto do comprovante (opcional)<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => setProofFile(event.target.files?.[0] ?? null)} />{proofFile && <small>{proofFile.name}</small>}</label>
+        {error && <p className="form-message form-error" role="alert">{error}</p>}
+        <div className="courier-confirm-actions"><button type="button" className="auth-button auth-button-secondary" disabled={Boolean(busyOrderId)} onClick={() => setActiveOrder(null)}>Cancelar</button><button type="submit" className="auth-button auth-button-primary" disabled={Boolean(busyOrderId)}><CircleCheck size={15} /> {busyOrderId === activeOrder.id ? 'Salvando entrega…' : 'Confirmar entrega'}</button></div>
+      </form>
+    </div>}
+  </main>
 }
 
 function MasterViewingBanner({ tenantName }: { tenantName: string }) {
