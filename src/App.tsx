@@ -2765,6 +2765,7 @@ function PromoBannerCarousel({ banners }: { banners: string[] }) {
   }, [banners.length, isHovered, currentIndex])
 
   return <section className="storefront-banner-carousel" aria-label="Ofertas e banners promocionais" aria-roledescription="carrossel" onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
+    <div className="storefront-banner-backdrop" style={{ backgroundImage: `url("${banners[currentIndex]}")` }} aria-hidden="true" />
     <img key={currentIndex} src={banners[currentIndex]} alt={`Oferta promocional ${currentIndex + 1}`} />
     {banners.length > 1 && <>
       <button type="button" aria-label="Banner anterior" onClick={() => setActiveIndex((index) => (index - 1 + banners.length) % banners.length)}><ArrowLeft size={18} /></button>
