@@ -167,10 +167,11 @@ function storeThemeStyle(color?: string): React.CSSProperties {
 type TenantPwaApp = 'storefront' | 'courier' | 'merchant'
 
 function syncTenantPwaIdentity(
-  tenant: { slug: string; name: string; logoUrl: string | null; brand: Portal['brand'] },
+  tenant: Pick<Portal, 'slug' | 'tenantName' | 'logoUrl' | 'brand'> | { slug: string; name: string; logoUrl: string | null; brand: Portal['brand'] },
   app: TenantPwaApp,
 ) {
-  const storeName = tenant.brand.app_name?.trim() || tenant.name
+  const tenantName = 'name' in tenant ? tenant.name : tenant.tenantName
+  const storeName = tenant.brand.app_name?.trim() || tenantName
   const appLabel = app === 'courier' ? 'Entregas' : app === 'merchant' ? 'Painel' : ''
   const appName = appLabel ? `${storeName} · ${appLabel}` : storeName
   const iconUrl = tenant.brand.app_icon_512_url || tenant.brand.app_icon_192_url || tenant.logoUrl
@@ -2282,7 +2283,14 @@ function CustomerAccountPage() {
             : { data: [], error: null }
           if (trackingError) throw trackingError
           if (!active) return
-          const positions = Object.fromEntries((trackingRows ?? []).map((position) => [position.order_id, {
+          const typedTrackingRows = (trackingRows ?? []) as {
+            order_id: string
+            latitude: number
+            longitude: number
+            heading: number | null
+            recorded_at: string
+          }[]
+          const positions = Object.fromEntries(typedTrackingRows.map((position) => [position.order_id, {
             latitude: Number(position.latitude),
             longitude: Number(position.longitude),
             heading: typeof position.heading === 'number' ? position.heading : null,
