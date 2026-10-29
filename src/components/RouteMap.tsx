@@ -7,10 +7,17 @@ type RouteGeometry = {
   coordinates: [number, number][]
 }
 
-export default function RouteMap({ geometry }: { geometry: RouteGeometry }) {
+type CourierPosition = {
+  latitude: number
+  longitude: number
+  heading: number | null
+}
+
+export default function RouteMap({ geometry, courierPosition }: { geometry?: RouteGeometry; courierPosition?: CourierPosition }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const routeLayerRef = useRef<L.LayerGroup | null>(null)
+  const courierMarkerRef = useRef<L.Marker | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -26,13 +33,14 @@ export default function RouteMap({ geometry }: { geometry: RouteGeometry }) {
       map.remove()
       mapRef.current = null
       routeLayerRef.current = null
+      courierMarkerRef.current = null
     }
   }, [])
 
   useEffect(() => {
     const map = mapRef.current
     const routeLayer = routeLayerRef.current
-    if (!map || !routeLayer) return
+    if (!map || !routeLayer || !geometry) return
 
     const points = geometry.coordinates.map(([longitude, latitude]) => L.latLng(latitude, longitude))
     if (points.length < 2) return
@@ -44,5 +52,26 @@ export default function RouteMap({ geometry }: { geometry: RouteGeometry }) {
     map.fitBounds(L.latLngBounds(points), { padding: [24, 24] })
   }, [geometry])
 
-  return <div className="route-map" ref={containerRef} role="img" aria-label="Mapa da rota de entrega calculada pelo OpenStreetMap" />
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !courierPosition) return
+
+    const point = L.latLng(courierPosition.latitude, courierPosition.longitude)
+    const icon = L.divIcon({
+      className: 'motoboy-icon',
+      html: `<span aria-hidden="true" style="transform: rotate(${courierPosition.heading ?? 0}deg)">🏍️</span>`,
+      iconSize: [42, 42],
+      iconAnchor: [21, 21],
+    })
+
+    if (courierMarkerRef.current) {
+      courierMarkerRef.current.setLatLng(point)
+      courierMarkerRef.current.setIcon(icon)
+    } else {
+      courierMarkerRef.current = L.marker(point, { icon, title: 'Localização do motoboy' }).addTo(map)
+      map.setView(point, 15)
+    }
+  }, [courierPosition])
+
+  return <div className="route-map" ref={containerRef} role="img" aria-label={courierPosition ? 'Mapa com a localização atual do motoboy' : 'Mapa da rota de entrega calculada pelo OpenStreetMap'} />
 }

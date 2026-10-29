@@ -456,6 +456,18 @@ td:first-child > small { display: block; margin-top: 4px; color: #999e95; font-s
 .courier-success-notice { padding: 10px 12px; border: 1px solid #d5e8c5; border-radius: 5px; background: #f3faed; color: #3e6322; font-size: 10px; }
 .courier-preview-note { padding: 10px 12px; border-radius: 5px; background: #fff8eb; color: #775a2c; font-size: 10px; }
 .courier-back-link { display: inline-block; margin-top: 20px; }
+.courier-route-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.courier-route-actions > a:last-child { display: inline-flex; align-items: center; gap: 4px; color: var(--store-color, #536d36); font-size: 9px; font-weight: 700; text-decoration: none; }
+.courier-tracking-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.courier-tracking-controls > span { display: inline-flex; align-items: center; gap: 7px; color: #47783e; font-size: 9px; }
+.courier-tracking-controls > span > i { width: 7px; height: 7px; border-radius: 50%; background: #27945b; box-shadow: 0 0 0 3px #27945b22; }
+.customer-live-tracking { display: grid; gap: 7px; margin-top: 8px; }
+.customer-live-tracking h3 { display: flex; align-items: center; gap: 6px; margin: 0; color: #434a3e; font: 600 11px 'Manrope', sans-serif; }
+.customer-live-tracking > small { color: #858b82; font-size: 8px; }
+.customer-live-tracking > p { margin: 0; padding: 12px; border-radius: 4px; background: #f5f7f1; color: #747d70; font-size: 9px; }
+.customer-live-tracking .route-map { height: 220px; }
+.motoboy-icon { border: 0 !important; background: transparent !important; transition: transform 1.8s linear !important; }
+.motoboy-icon span { width: 38px; height: 38px; display: grid; place-items: center; border: 2px solid white; border-radius: 50%; background: #e2f294; box-shadow: 0 2px 9px #20241f50; font-size: 22px; transition: transform .3s ease; }
 .courier-confirm-backdrop { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 16px; background: #17201780; }
 .courier-confirm-dialog { width: min(520px, 100%); max-height: min(90dvh, 760px); overflow: auto; display: grid; gap: 14px; padding: 20px; border: 1px solid #e7eae3; border-radius: 8px; background: white; box-shadow: 0 20px 60px #101a1030; }
 .courier-confirm-dialog > header { padding-bottom: 12px; border-bottom: 1px solid #e9ece5; }
@@ -633,6 +645,11 @@ td:first-child > small { display: block; margin-top: 4px; color: #999e95; font-s
   .courier-confirm-dialog { width: 100%; max-height: 100dvh; min-height: 100dvh; padding: 18px 14px; border-radius: 0; }
   .courier-confirm-actions { flex-direction: column-reverse; }
   .courier-confirm-actions .auth-button { width: 100%; }
+  .courier-route-actions { align-items: stretch; flex-direction: column; }
+  .courier-route-actions .auth-button { width: 100%; }
+  .courier-tracking-controls { align-items: stretch; flex-direction: column; }
+  .courier-tracking-controls .auth-button { width: 100%; }
+  .customer-live-tracking .route-map { height: 190px; }
   .cart-drawer { padding: 18px 15px; }
 }
 

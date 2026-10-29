@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, Banknote, Bike, Camera, CarFront, ChartNoAxesCombined, CircleCheck, CreditCard, ExternalLink, Flame, LifeBuoy, LockKeyhole, MapPin, MessageCircle, Minus, Package, PackageCheck, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShieldCheck, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Banknote, Bike, Camera, CarFront, ChartNoAxesCombined, CircleCheck, CreditCard, ExternalLink, Flame, LifeBuoy, LockKeyhole, MapPin, MessageCircle, Minus, Navigation, Package, PackageCheck, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShieldCheck, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X, Zap } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
+import RouteMap from './components/RouteMap'
 
 
 type Plan = {
@@ -21,7 +22,7 @@ type Portal = {
   role: string
   slug: string
   logoUrl: string | null
-  brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean }
+  brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean; app_icon_192_url?: string; app_icon_512_url?: string }
 }
 type CatalogProduct = {
   id: string
@@ -97,6 +98,12 @@ type DeliveryQuote = {
   shipping_amount: number
   cache_hit: boolean
 }
+type LiveCourierPosition = {
+  latitude: number
+  longitude: number
+  heading: number | null
+  recorded_at: string
+}
 type Conversation = { id: string; tenant_id: string; subject: string; status: string; created_at: string }
 type SupportMessage = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string }
 type MasterStoreMetrics = {
@@ -155,6 +162,42 @@ function monthDisplayDate(value: string) {
 function storeThemeStyle(color?: string): React.CSSProperties {
   const primaryColor = color && /^#[\da-f]{6}$/i.test(color) ? color : '#293125'
   return { '--store-color': primaryColor } as React.CSSProperties
+}
+
+type TenantPwaApp = 'storefront' | 'courier' | 'merchant'
+
+function syncTenantPwaIdentity(
+  tenant: { slug: string; name: string; logoUrl: string | null; brand: Portal['brand'] },
+  app: TenantPwaApp,
+) {
+  const storeName = tenant.brand.app_name?.trim() || tenant.name
+  const appLabel = app === 'courier' ? 'Entregas' : app === 'merchant' ? 'Painel' : ''
+  const appName = appLabel ? `${storeName} · ${appLabel}` : storeName
+  const iconUrl = tenant.brand.app_icon_512_url || tenant.brand.app_icon_192_url || tenant.logoUrl
+  const themeColor = tenant.brand.primary_color && /^#[\da-f]{6}$/i.test(tenant.brand.primary_color)
+    ? tenant.brand.primary_color
+    : '#f5f6f1'
+  const memberEntry = app === 'courier' && window.location.pathname === '/entregador'
+    ? 'courier'
+    : app === 'merchant' && window.location.pathname === '/app'
+      ? 'merchant'
+      : ''
+  const manifestUrl = `/api/manifest?tenant=${encodeURIComponent(tenant.slug)}&app=${app}${memberEntry ? `&entry=${memberEntry}` : ''}`
+
+  document.title = appName
+  const manifestLink = document.getElementById('tenant-manifest') as HTMLLinkElement | null
+  if (manifestLink) manifestLink.href = manifestUrl
+  const favicon = document.getElementById('tenant-favicon') as HTMLLinkElement | null
+  if (favicon && iconUrl) {
+    favicon.href = iconUrl
+    favicon.type = iconUrl.includes('.svg') ? 'image/svg+xml' : 'image/webp'
+  }
+  const appleIcon = document.getElementById('tenant-apple-icon') as HTMLLinkElement | null
+  if (appleIcon && (tenant.brand.app_icon_192_url || iconUrl)) appleIcon.href = tenant.brand.app_icon_192_url || iconUrl || ''
+  const themeMeta = document.getElementById('tenant-theme-color') as HTMLMetaElement | null
+  if (themeMeta) themeMeta.content = themeColor
+  const appleTitle = document.getElementById('tenant-apple-title') as HTMLMetaElement | null
+  if (appleTitle) appleTitle.content = appName
 }
 
 function isValidBrDocument(value: string) {
@@ -267,7 +310,7 @@ function productSearchScore(query: string, product: Pick<CatalogProduct, 'name' 
   return average + (phraseMatch ? 25 : 0)
 }
 
-function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, removeWhiteBackground = false, targetAspectRatio?: number): Promise<Blob> {
+function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, removeWhiteBackground = false, targetAspectRatio?: number, backgroundColor = '#f2f3ef', contentScale = 1): Promise<Blob> {
   return createImageBitmap(file).then((image) => {
     const scale = Math.min(1, maxDimension / Math.max(image.width, image.height))
     const canvas = document.createElement('canvas')
@@ -285,9 +328,9 @@ function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, remo
       throw new Error('Não foi possível preparar a imagem.')
     }
     if (targetAspectRatio) {
-      context.fillStyle = '#f2f3ef'
+      context.fillStyle = backgroundColor
       context.fillRect(0, 0, canvas.width, canvas.height)
-      const imageScale = Math.min(canvas.width / image.width, canvas.height / image.height, scale)
+      const imageScale = Math.min(canvas.width * contentScale / image.width, canvas.height * contentScale / image.height, scale)
       const imageWidth = image.width * imageScale
       const imageHeight = image.height * imageScale
       context.drawImage(image, (canvas.width - imageWidth) / 2, (canvas.height - imageHeight) / 2, imageWidth, imageHeight)
@@ -346,13 +389,17 @@ function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, remo
 }
 
 function tenantBannerStoragePath(url: string, tenantId: string) {
+  return tenantBrandStoragePath(url, tenantId, 'banners')
+}
+
+function tenantBrandStoragePath(url: string, tenantId: string, folder: 'banners' | 'icons') {
   try {
     const objectPrefix = '/storage/v1/object/public/tenant-media/'
     const pathname = new URL(url).pathname
     const prefixIndex = pathname.indexOf(objectPrefix)
     if (prefixIndex < 0) return null
     const path = decodeURIComponent(pathname.slice(prefixIndex + objectPrefix.length))
-    return path.startsWith(`tenants/${tenantId}/brand/banners/`) ? path : null
+    return path.startsWith(`tenants/${tenantId}/brand/${folder}/`) ? path : null
   } catch {
     return null
   }
@@ -785,6 +832,9 @@ function MerchantPortal({ user, portal, onLogout, masterPreview = false }: { use
   const [supportOpen, setSupportOpen] = useState(false)
   const isStoreTeam = portal.role !== 'courier'
   const canManageSettings = masterPreview || ['owner', 'admin', 'manager'].includes(portal.role)
+  useEffect(() => {
+    syncTenantPwaIdentity(currentPortal, 'merchant')
+  }, [currentPortal])
   return (
     <main className="portal-page" style={storeThemeStyle(currentPortal.brand.primary_color)}>
       {masterPreview && <MasterViewingBanner tenantName={currentPortal.tenantName} />}
@@ -1373,6 +1423,8 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoUrl, setLogoUrl] = useState(portal.logoUrl)
   const [logoPreview, setLogoPreview] = useState('')
+  const [appIcon192Url, setAppIcon192Url] = useState(portal.brand.app_icon_192_url ?? '')
+  const [appIcon512Url, setAppIcon512Url] = useState(portal.brand.app_icon_512_url ?? '')
   const [banners, setBanners] = useState(portal.brand.promotional_banners ?? [])
   const [removedBanners, setRemovedBanners] = useState<string[]>([])
   const [bannerFiles, setBannerFiles] = useState<File[]>([])
@@ -1403,9 +1455,13 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
     setError('')
     setNotice('')
     const uploadedPaths: string[] = []
+    let regeneratedAppIcons = false
     try {
       const client = requireSupabase()
       let updatedLogoUrl = logoUrl
+      let updatedIcon192Url = appIcon192Url
+      let updatedIcon512Url = appIcon512Url
+      let iconSourceForApp: File | null = logoFile
       if (logoFile) {
         const image = await convertImageToWebP(logoFile, 800, 0.92, true)
         if (image.size > 5 * 1024 * 1024) {
@@ -1420,6 +1476,38 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
         if (uploadError) throw uploadError
         uploadedPaths.push(path)
         updatedLogoUrl = `${client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl}?v=${Date.now()}`
+        iconSourceForApp = new File([image], 'tenant-logo.webp', { type: 'image/webp' })
+      }
+      const previousPrimaryColor = portal.brand.primary_color ?? '#293125'
+      const shouldRegenerateIcons = Boolean(logoFile)
+        || Boolean(updatedLogoUrl && (!appIcon192Url || !appIcon512Url || primaryColor.toLowerCase() !== previousPrimaryColor.toLowerCase()))
+      if (shouldRegenerateIcons && updatedLogoUrl) {
+        let iconSourceFile = iconSourceForApp
+        if (!iconSourceFile) {
+          const logoResponse = await fetch(updatedLogoUrl)
+          if (!logoResponse.ok) throw new Error('Não foi possível carregar a logomarca atual para atualizar os ícones do aplicativo.')
+          const logoBlob = await logoResponse.blob()
+          iconSourceFile = new File([logoBlob], 'tenant-logo.webp', { type: logoBlob.type || 'image/webp' })
+        }
+        const iconBackground = /^#[\da-f]{6}$/i.test(primaryColor) ? primaryColor : '#293125'
+        const iconImages = [
+          { size: 192, image: await convertImageToWebP(iconSourceFile, 192, 0.9, false, 1, iconBackground, 0.8) },
+          { size: 512, image: await convertImageToWebP(iconSourceFile, 512, 0.9, false, 1, iconBackground, 0.8) },
+        ]
+        for (const { size, image: iconImage } of iconImages) {
+          const iconPath = `tenants/${portal.tenantId}/brand/icons/${crypto.randomUUID()}-${size}.webp`
+          const { error: iconUploadError } = await client.storage.from('tenant-media').upload(iconPath, iconImage, {
+            cacheControl: '3600',
+            contentType: 'image/webp',
+            upsert: false,
+          })
+          if (iconUploadError) throw iconUploadError
+          uploadedPaths.push(iconPath)
+          const iconUrl = client.storage.from('tenant-media').getPublicUrl(iconPath).data.publicUrl
+          if (size === 192) updatedIcon192Url = iconUrl
+          else updatedIcon512Url = iconUrl
+        }
+        regeneratedAppIcons = true
       }
       const uploadedBanners: string[] = []
       for (const [index, file] of bannerFiles.entries()) {
@@ -1438,7 +1526,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
         uploadedBanners.push(client.storage.from('tenant-media').getPublicUrl(path).data.publicUrl)
       }
       const updatedBanners = [...banners, ...uploadedBanners]
-      const { error: updateError } = await client.rpc('update_tenant_brand_with_banners', {
+      const { error: updateError } = await client.rpc('update_tenant_brand_with_pwa', {
         p_tenant_id: portal.tenantId,
         p_app_name: appName.trim(),
         p_primary_color: primaryColor,
@@ -1446,10 +1534,14 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
         p_logo_url: updatedLogoUrl,
         p_banners: updatedBanners,
         p_show_logo_watermark: showLogoWatermark,
+        p_app_icon_192_url: updatedIcon192Url || null,
+        p_app_icon_512_url: updatedIcon512Url || null,
       })
       if (updateError) throw updateError
       uploadedPaths.length = 0
       setLogoUrl(updatedLogoUrl)
+      setAppIcon192Url(updatedIcon192Url)
+      setAppIcon512Url(updatedIcon512Url)
       setBanners(updatedBanners)
       setBannerFiles([])
       setLogoFile(null)
@@ -1459,10 +1551,16 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
         tagline: tagline.trim(),
         promotional_banners: updatedBanners,
         show_logo_watermark: showLogoWatermark,
+        app_icon_192_url: updatedIcon192Url,
+        app_icon_512_url: updatedIcon512Url,
       }, updatedLogoUrl)
-      const removedPaths = removedBanners
-        .map((url) => tenantBannerStoragePath(url, portal.tenantId))
+      const removedIconPaths = regeneratedAppIcons
+        ? [appIcon192Url, appIcon512Url].filter(Boolean).map((url) => tenantBrandStoragePath(url, portal.tenantId, 'icons'))
+        : []
+      const removedPaths = [...removedBanners
+        .map((url) => tenantBannerStoragePath(url, portal.tenantId)), ...removedIconPaths]
         .filter((path): path is string => path !== null)
+        .filter((path, index, allPaths) => allPaths.indexOf(path) === index)
       if (removedPaths.length) {
         const { error: removalError } = await client.storage.from('tenant-media').remove(removedPaths)
         if (removalError) {
@@ -1578,7 +1676,7 @@ function courierAddressLabel(address: Record<string, unknown> | null) {
 function courierMapLinks(address: Record<string, unknown> | null) {
   const query = encodeURIComponent(courierAddressLabel(address))
   return {
-    google: `https://www.google.com/maps/search/?api=1&query=${query}`,
+    google: `https://www.google.com/maps/dir/?api=1&destination=${query}`,
     waze: `https://waze.com/ul?q=${query}&navigate=yes`,
   }
 }
@@ -1595,8 +1693,85 @@ function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user
   const [amountReceived, setAmountReceived] = useState('')
   const [collectionMethod, setCollectionMethod] = useState<'' | 'cash' | 'card' | 'pix'>('')
   const [proofFile, setProofFile] = useState<File | null>(null)
+  const [trackingOrderId, setTrackingOrderId] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const locationWatchRef = useRef<number | null>(null)
+  const locationIntervalRef = useRef<number | null>(null)
+  const latestPositionRef = useRef<GeolocationPosition | null>(null)
+  const trackingOrderRef = useRef('')
+
+  useEffect(() => {
+    syncTenantPwaIdentity(portal, 'courier')
+  }, [portal])
+
+  function stopLocationTracking() {
+    if (locationWatchRef.current !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(locationWatchRef.current)
+      locationWatchRef.current = null
+    }
+    if (locationIntervalRef.current !== null) {
+      window.clearInterval(locationIntervalRef.current)
+      locationIntervalRef.current = null
+    }
+    latestPositionRef.current = null
+    trackingOrderRef.current = ''
+    setTrackingOrderId('')
+  }
+
+  async function sendTrackingPosition() {
+    const position = latestPositionRef.current
+    const orderId = trackingOrderRef.current
+    if (!position || !orderId) return
+    const { latitude, longitude, heading } = position.coords
+    const { error: insertError } = await requireSupabase().from('delivery_tracking').insert({
+      order_id: orderId,
+      courier_id: user.id,
+      latitude,
+      longitude,
+      heading: typeof heading === 'number' && Number.isFinite(heading) ? heading : null,
+    })
+    if (insertError) setError(`GPS ativo, mas não foi possível enviar a posição: ${errorText(insertError)}`)
+    else setError('')
+  }
+
+  function startLocationTracking(order: CourierDeliveryOrder) {
+    if (!navigator.geolocation) {
+      setError('Este navegador não oferece geolocalização. Abra o PWA em um navegador compatível e permita o acesso ao GPS.')
+      return
+    }
+    stopLocationTracking()
+    setError('')
+    trackingOrderRef.current = order.id
+    setTrackingOrderId(order.id)
+    let firstPosition = true
+    try {
+      locationWatchRef.current = navigator.geolocation.watchPosition((position) => {
+        latestPositionRef.current = position
+        if (firstPosition) {
+          firstPosition = false
+          void sendTrackingPosition()
+        }
+      }, (positionError) => {
+        const message = positionError.code === positionError.PERMISSION_DENIED
+          ? 'Permita o acesso à localização para iniciar o rastreamento da entrega.'
+          : positionError.code === positionError.POSITION_UNAVAILABLE
+            ? 'A localização do dispositivo está indisponível. Verifique o GPS e tente novamente.'
+            : 'A leitura do GPS expirou. Verifique o sinal e tente novamente.'
+        setError(message)
+        if (positionError.code === positionError.PERMISSION_DENIED) stopLocationTracking()
+      }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 })
+      locationIntervalRef.current = window.setInterval(() => { void sendTrackingPosition() }, 20000)
+    } catch (reason) {
+      stopLocationTracking()
+      setError(errorText(reason))
+    }
+  }
+
+  useEffect(() => () => {
+    if (locationWatchRef.current !== null && navigator.geolocation) navigator.geolocation.clearWatch(locationWatchRef.current)
+    if (locationIntervalRef.current !== null) window.clearInterval(locationIntervalRef.current)
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -1712,6 +1887,7 @@ function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user
         p_proof_path: uploadedPath || null,
       })
       if (completionError) throw completionError
+      if (trackingOrderRef.current === activeOrder.id) stopLocationTracking()
       setActiveOrder(null)
       setNotice(`Entrega do pedido #${activeOrder.order_number} concluída.`)
       setRefreshKey((current) => current + 1)
@@ -1739,7 +1915,11 @@ function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user
         <section><small><MapPin size={14} /> ORIGEM · LOJA</small><b>{portal.tenantName}</b><p>{courierAddressLabel(storeAddress)}</p><div><a href={originLinks.google} target="_blank" rel="noreferrer">Google Maps <ExternalLink size={12} /></a><a href={originLinks.waze} target="_blank" rel="noreferrer">Waze <ExternalLink size={12} /></a></div></section>
         <section><small><MapPin size={14} /> DESTINO · {customerName.toLocaleUpperCase('pt-BR')}</small><p>{courierAddressLabel(order.delivery_address)}</p><div><a href={destinationLinks.google} target="_blank" rel="noreferrer">Google Maps <ExternalLink size={12} /></a><a href={destinationLinks.waze} target="_blank" rel="noreferrer">Waze <ExternalLink size={12} /></a></div></section>
       </div>
+      {assigned && <div className="courier-route-actions"><a className="auth-button auth-button-secondary" href={destinationLinks.google} target="_blank" rel="noreferrer"><Navigation size={15} /> Iniciar Navegação</a><a href={destinationLinks.waze} target="_blank" rel="noreferrer">Abrir no Waze <ExternalLink size={12} /></a></div>}
       <section className="courier-items-check"><h4><PackageCheck size={16} /> Conferência de peças</h4>{order.order_items.map((item) => <div key={`${item.sku}-${item.product_name}`}><span>{item.product_name}<small>SKU {item.sku}</small></span><b>× {item.quantity}</b></div>)}</section>
+      {assigned && (trackingOrderId === order.id
+        ? <div className="courier-tracking-controls"><span><i /> GPS transmitindo a cada 20 segundos</span><button type="button" className="auth-button auth-button-secondary" onClick={stopLocationTracking}>Parar rastreamento</button></div>
+        : <button className="auth-button auth-button-secondary courier-action-button" type="button" onClick={() => startLocationTracking(order)}><MapPin size={16} /> Iniciar Corrida / A caminho da entrega</button>)}
       {assigned ? <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id} onClick={() => openCompletion(order)}><CircleCheck size={16} /> Confirmar Entrega na Oficina</button> : <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id || masterPreview} onClick={() => void acceptOrder(order)}><Bike size={16} /> {busyOrderId === order.id ? 'Atribuindo…' : 'Coletar Peça na Loja'}</button>}
     </article>
   }
@@ -2004,6 +2184,7 @@ function CustomerAccountPage() {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
+  const [courierPositions, setCourierPositions] = useState<Record<string, LiveCourierPosition>>({})
   const ordersRef = useRef<CustomerOrder[]>([])
   const [authMode, setAuthMode] = useState<'login' | 'register'>(() =>
     new URLSearchParams(window.location.search).get('mode') === 'register' ? 'register' : 'login',
@@ -2095,7 +2276,19 @@ function CustomerAccountPage() {
             ? await client.from('order_status_events').select('order_id, status, created_at').in('order_id', orderIds).order('created_at', { ascending: true })
             : { data: [], error: null }
           if (timelineError) throw timelineError
+          const trackingOrderIds = rows.filter((order) => order.status === 'delivery' && !order.is_pickup).map((order) => order.id)
+          const { data: trackingRows, error: trackingError } = trackingOrderIds.length
+            ? await client.rpc('get_customer_delivery_tracking', { p_order_ids: trackingOrderIds })
+            : { data: [], error: null }
+          if (trackingError) throw trackingError
           if (!active) return
+          const positions = Object.fromEntries((trackingRows ?? []).map((position) => [position.order_id, {
+            latitude: Number(position.latitude),
+            longitude: Number(position.longitude),
+            heading: typeof position.heading === 'number' ? position.heading : null,
+            recorded_at: position.recorded_at,
+          }])) as Record<string, LiveCourierPosition>
+          setCourierPositions(positions)
           setOrders(rows.map((order) => ({
             ...order,
             items: (itemRows ?? []).filter((item) => item.order_id === order.id),
@@ -2159,6 +2352,28 @@ function CustomerAccountPage() {
             )
             setOrders(ordersRef.current)
           })
+      })
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'delivery_tracking',
+      }, (payload) => {
+        const position = payload.new as {
+          order_id: string
+          latitude: number
+          longitude: number
+          heading: number | null
+          recorded_at: string
+        }
+        const currentOrder = ordersRef.current.find((order) => order.id === position.order_id && order.status === 'delivery')
+        if (!currentOrder) return
+        setCourierPositions((current) => ({
+          ...current,
+          [position.order_id]: {
+            latitude: Number(position.latitude),
+            longitude: Number(position.longitude),
+            heading: typeof position.heading === 'number' ? position.heading : null,
+            recorded_at: position.recorded_at,
+          },
+        }))
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') setRealtimeState('connected')
@@ -2376,6 +2591,7 @@ function CustomerAccountPage() {
             <div className="customer-order-heading"><div><b>Pedido #{order.order_number}</b><small>{new Date(order.created_at).toLocaleString('pt-BR')} · {order.is_pickup ? 'Retirada no balcão' : 'Entrega por motoboy'}</small></div><span className={`customer-order-status status-${order.payment_status}`}>{order.payment_status === 'paid' ? 'Pagamento confirmado' : order.payment_status === 'failed' ? 'Pagamento não concluído' : order.payment_status === 'refunded' ? 'Estornado' : 'Aguardando pagamento'}</span></div>
             <div className="customer-order-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity}× {item.product_name} ({item.sku})</span>)}</div>
             {order.delivery_address && <small>{order.delivery_address.street}, {order.delivery_address.number} · CEP {order.delivery_address.postal_code}</small>}
+            {order.status === 'delivery' && !order.is_pickup && <section className="customer-live-tracking"><h3><Bike size={15} /> Localização do motoboy</h3>{courierPositions[order.id] ? <><RouteMap courierPosition={courierPositions[order.id]} /><small>Última atualização: {new Date(courierPositions[order.id].recorded_at).toLocaleTimeString('pt-BR')}</small></> : <p>Aguardando a primeira posição do motoboy…</p>}</section>}
             <div className="customer-order-total"><span>{orderStatusLabel(order.status)}</span><b>Total {money(Number(order.total))}</b></div>
             <ol className={`customer-order-timeline${order.status === 'cancelled' ? ' is-cancelled' : ''}`} aria-label={`Acompanhamento do pedido ${order.order_number}`}>
               {(order.timeline.length ? order.timeline : [{ status: order.status, created_at: order.created_at }]).map((event, index) => <li key={`${order.id}-${event.status}-${event.created_at}-${index}`}>
@@ -2888,7 +3104,7 @@ function StorefrontPage({ slug }: { slug: string }) {
     logo_url: string | null
     whatsapp: string | null
     status: string
-    brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean }
+    brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean; app_icon_192_url?: string; app_icon_512_url?: string }
   } | null>(null)
   const [products, setProducts] = useState<Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]>([])
   const [catalogLoaded, setCatalogLoaded] = useState(false)
@@ -2948,6 +3164,9 @@ function StorefrontPage({ slug }: { slug: string }) {
     })()
     return () => { active = false }
   }, [slug])
+  useEffect(() => {
+    if (store) syncTenantPwaIdentity({ slug: store.slug, name: store.name, logoUrl: store.logo_url, brand: store.brand }, 'storefront')
+  }, [store])
   return <main className="storefront-page" style={storeThemeStyle(store?.brand.primary_color)}>
     {masterViewing && store && <MasterViewingBanner tenantName={store.name} />}
     <section className="storefront-shell">
