@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ArrowLeft, ArrowRight, Bike, CarFront, ChartNoAxesCombined, LifeBuoy, LockKeyhole, MessageCircle, Minus, Package, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bike, CarFront, ChartNoAxesCombined, CreditCard, Flame, LifeBuoy, LockKeyhole, MessageCircle, Minus, Package, Palette, PanelsTopLeft, Plus, RefreshCw, Search, Send, ShieldCheck, ShoppingCart, Store, Trash2, Upload, UserRound, Wallet, X, Zap } from 'lucide-react'
 import { requireSupabase } from './services/supabase'
 
 
@@ -1753,7 +1753,9 @@ function CustomerAccountPage() {
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
   const ordersRef = useRef<CustomerOrder[]>([])
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authMode, setAuthMode] = useState<'login' | 'register'>(() =>
+    new URLSearchParams(window.location.search).get('mode') === 'register' ? 'register' : 'login',
+  )
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [cancelBusyId, setCancelBusyId] = useState('')
@@ -2143,12 +2145,14 @@ function StorefrontShop({
   catalogLoaded,
   pickupEnabled,
   freeUntilKm,
+  masterViewing,
 }: {
-  store: { id: string; slug: string; status: string }
+  store: { id: string; slug: string; name: string; logo_url: string | null; whatsapp: string | null; status: string; brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[] } }
   products: Pick<CatalogProduct, 'id' | 'sku' | 'name' | 'description' | 'price' | 'stock' | 'image_url' | 'compatible_makes' | 'compatible_models' | 'compatible_years' | 'compatible_engines'>[]
   catalogLoaded: boolean
   pickupEnabled: boolean
   freeUntilKm: number
+  masterViewing: boolean
 }) {
   const cartStorageKey = `vancely-cart-${store.slug}`
   const [cart, setCart] = useState<Record<string, number>>(() => {
@@ -2164,12 +2168,14 @@ function StorefrontShop({
     }
   })
   const [userId, setUserId] = useState('')
+  const [customerEmail, setCustomerEmail] = useState('')
   const [profile, setProfile] = useState<CustomerProfile | null>(null)
   const [make, setMake] = useState('')
   const [model, setModel] = useState('')
   const [year, setYear] = useState('')
   const [plate, setPlate] = useState('')
   const [search, setSearch] = useState('')
+  const [quickFilter, setQuickFilter] = useState<'' | 'express' | 'original' | 'popular'>('')
   const [vehicleNotice, setVehicleNotice] = useState('')
   const [vehicleError, setVehicleError] = useState('')
   const [cartNotice, setCartNotice] = useState('')
@@ -2187,7 +2193,6 @@ function StorefrontShop({
   const [quoteBusy, setQuoteBusy] = useState(false)
   const [checkoutBusy, setCheckoutBusy] = useState(false)
   const [checkoutError, setCheckoutError] = useState('')
-  const checkoutSectionRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     if (!catalogLoaded) return
@@ -2227,7 +2232,10 @@ function StorefrontShop({
         const { data: userData, error: userError } = await client.auth.getUser()
         if (userError) throw userError
         if (!userData.user) return
-        if (active) setUserId(userData.user.id)
+        if (active) {
+          setUserId(userData.user.id)
+          setCustomerEmail(userData.user.email ?? '')
+        }
         const { data, error: profileError } = await client.from('customer_profiles')
           .select('user_id, full_name, document, phone, postal_code, street, address_number, complement, district, city, state')
           .eq('user_id', userData.user.id).maybeSingle()
@@ -2253,10 +2261,16 @@ function StorefrontShop({
 
   useEffect(() => {
     if (!checkoutOpen) return
-    const frame = window.requestAnimationFrame(() => {
-      checkoutSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
-    return () => window.cancelAnimationFrame(frame)
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setCheckoutOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
   }, [checkoutOpen])
 
   const makes = [...new Set(products.flatMap((product) => product.compatible_makes))].sort()
@@ -2276,11 +2290,25 @@ function StorefrontShop({
     index,
     score: search.trim() ? productSearchScore(search, product) : 0,
   })).filter(({ product, score }) => {
+    const productText = `${product.name} ${product.description ?? ''}`.toLocaleLowerCase('pt-BR')
+    const quickMatch = quickFilter === ''
+      || (quickFilter === 'express' && product.stock > 0)
+      || (quickFilter === 'original' && /original|genu[ií]na|homologad|garantia/.test(productText))
+      || (quickFilter === 'popular' && /filtro|pastilha|[oó]leo|vela/.test(productText))
     const makeMatch = !make || product.compatible_makes.length === 0 || product.compatible_makes.some((value) => value.toLocaleLowerCase('pt-BR') === make.toLocaleLowerCase('pt-BR'))
     const modelMatch = !model || product.compatible_models.length === 0 || product.compatible_models.some((value) => value.toLocaleLowerCase('pt-BR') === model.toLocaleLowerCase('pt-BR'))
     const yearMatch = !year || product.compatible_years.length === 0 || product.compatible_years.includes(Number(year))
-    return (!search.trim() || score > 0) && makeMatch && modelMatch && yearMatch
+    return quickMatch && (!search.trim() || score > 0) && makeMatch && modelMatch && yearMatch
   }).sort((left, right) => right.score - left.score || left.index - right.index).map(({ product }) => product)
+
+  function applyQuickFilter(filter: 'express' | 'original' | 'popular') {
+    setQuickFilter(filter)
+    setSearch('')
+    setMake('')
+    setModel('')
+    setYear('')
+    window.requestAnimationFrame(() => document.getElementById('storefront-products')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
 
   function updateAddress(field: keyof typeof address, value: string) {
     setAddress((current) => ({ ...current, [field]: value }))
@@ -2293,6 +2321,7 @@ function StorefrontShop({
       return
     }
     if (change > 0) setCartNotice(`${product.name} adicionado ao carrinho.`)
+    if (change > 0) setCheckoutOpen(true)
     setCart((current) => {
       const maxQuantity = Math.max(product.stock, store.status === 'trial' ? 1 : 0)
       const nextQuantity = Math.min(maxQuantity, Math.max(0, (current[product.id] ?? 0) + change))
@@ -2481,17 +2510,45 @@ function StorefrontShop({
     }
   }
 
-  return <section className="storefront-catalog">
+  const signInHref = `/cliente/entrar?next=${encodeURIComponent(`/loja/${store.slug}?checkout=1`)}`
+  const registerHref = `/cliente/entrar?mode=register&next=${encodeURIComponent(`/loja/${store.slug}?checkout=1`)}`
+  const whatsappNumber = store.whatsapp?.replace(/\D/g, '')
+  const whatsappHref = `https://wa.me/${whatsappNumber ?? ''}?text=${encodeURIComponent('Olá! Tenho uma dúvida sobre compatibilidade de uma peça.')}`
+
+  return <>
+    <header className="storefront-heading storefront-store-header">
+      <div className="storefront-brand">
+        {store.logo_url && <div className="storefront-logo-frame"><img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} /></div>}
+        <div><p className="eyebrow">VITRINE B2C / B2B</p><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></div>
+      </div>
+      <form className="storefront-top-search" role="search" onSubmit={(event) => event.preventDefault()}>
+        <label className="storefront-header-search">
+          <Search size={19} aria-hidden="true" />
+          <input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setQuickFilter('') }} placeholder="Buscar peças, modelo, SKU ou código OEM" aria-label="Buscar peças, modelo, SKU ou código OEM" />
+        </label>
+        <button type="submit" aria-label="Buscar"><Search size={18} /></button>
+      </form>
+      <nav className="storefront-account-nav" aria-label="Conta e carrinho">
+        {masterViewing ? <a className="auth-subtle-link" href="/admin">Central Vancely</a> : userId ? <a className="storefront-customer-link" href="/cliente"><UserRound size={17} /><span><small>Olá,</small><b>{profile?.full_name || customerEmail.split('@')[0] || 'Cliente'}</b></span></a> : <div className="storefront-signin-links"><a href={signInHref}>Entre</a><a href={registerHref}>Crie a sua conta</a></div>}
+        <button className="storefront-header-cart" type="button" aria-label={`Abrir carrinho com ${cartCount} ${cartCount === 1 ? 'item' : 'itens'}`} aria-expanded={checkoutOpen} onClick={() => setCheckoutOpen(true)}><ShoppingCart size={21} /><span>Carrinho</span><b>{cartCount}</b></button>
+      </nav>
+    </header>
+    {store.brand.promotional_banners?.length ? <PromoBannerCarousel banners={store.brand.promotional_banners} /> : <section className="storefront-default-banner" aria-label="Destaque da loja"><span>PEÇAS CERTAS PARA O SEU VEÍCULO</span><h2>{store.brand.tagline || 'Encontre o que seu carro precisa.'}</h2><p>Consulte aplicação, disponibilidade e entrega com a loja.</p></section>}
+    {store.status === 'trial' && <p className="storefront-trial-message">Loja em demonstração: você pode explorar o catálogo, mas pedidos e pagamentos ficam disponíveis após a ativação comercial.</p>}
+    <section className="storefront-quick-links" aria-label="Atalhos da loja">
+      <button type="button" onClick={() => { document.getElementById(`storefront-plate-${store.slug}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); window.requestAnimationFrame(() => document.getElementById(`storefront-plate-${store.slug}`)?.focus()) }}><span><CarFront size={20} /></span><b>Consulta por placa</b><small>Encontre peças para seu veículo</small></button>
+      <button type="button" aria-pressed={quickFilter === 'express'} onClick={() => applyQuickFilter('express')}><span><Zap size={20} /></span><b>Entrega expressa</b><small>Veja itens disponíveis em estoque</small></button>
+      <button type="button" aria-pressed={quickFilter === 'original'} onClick={() => applyQuickFilter('original')}><span><ShieldCheck size={20} /></span><b>Originais & garantia</b><small>Consulte produtos identificados</small></button>
+      <button type="button" aria-pressed={quickFilter === 'popular'} onClick={() => applyQuickFilter('popular')}><span><Flame size={20} /></span><b>Mais procurados</b><small>Filtros, pastilhas, óleos e velas</small></button>
+      <button type="button" onClick={() => { setPaymentMethod('pix'); setCheckoutOpen(true) }}><span><CreditCard size={20} /></span><b>Pagamento</b><small>Pix ou cartão pelo Asaas</small></button>
+      <a href={whatsappHref} target="_blank" rel="noreferrer"><span><MessageCircle size={20} /></span><b>Atendimento técnico</b><small>{whatsappNumber ? 'Tire dúvidas pelo WhatsApp' : 'Fale com um consultor'}</small></a>
+    </section>
+    <section className="storefront-catalog">
     <div className="storefront-shop-heading">
-      <div><p className="eyebrow">CATÁLOGO DA LOJA</p><h2>Encontre sua peça</h2><p>Pesquise pelo nome da peça ou filtre pela aplicação do seu veículo.</p></div>
-      <button className="auth-button auth-button-primary storefront-cart-toggle" type="button" aria-expanded={checkoutOpen} onClick={() => setCheckoutOpen((open) => !open)}><ShoppingCart size={16} /> Ver carrinho ({cartCount})</button>
+      <div><p className="eyebrow">CATÁLOGO DA LOJA</p><h2>Encontre sua peça</h2><p>Filtre pela aplicação do veículo e confira disponibilidade na loja.</p></div>
     </div>
     {cartNotice && <p className="storefront-cart-notice" role="status">{cartNotice}</p>}
     <div className="storefront-search-panel">
-      <label className="storefront-header-search">
-        <Search size={19} />
-        <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar peça, modelo ou código SKU" aria-label="Buscar peças por nome, aplicação ou SKU" />
-      </label>
       <form className="storefront-plate-search" onSubmit={(event) => void searchVehicleByPlate(event)}>
         <label htmlFor={`storefront-plate-${store.slug}`}><CarFront size={16} /> Buscar peças pela placa</label>
         <div><input id={`storefront-plate-${store.slug}`} value={plate} maxLength={8} onChange={(event) => setPlate(event.target.value.toUpperCase())} placeholder="ABC1D23" aria-label="Placa do veículo" /><button className="auth-button auth-button-secondary" type="submit" disabled={searchBusy}>{searchBusy ? 'Buscando…' : 'Consultar placa'}</button></div>
@@ -2500,8 +2557,9 @@ function StorefrontShop({
         <label>Marca<select value={make} onChange={(event) => { setMake(event.target.value); setModel(''); setYear('') }}><option value="">Todas as marcas</option>{makes.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>Modelo<select value={model} onChange={(event) => { setModel(event.target.value); setYear('') }}><option value="">Todos os modelos</option>{models.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>Ano<select value={year} onChange={(event) => setYear(event.target.value)}><option value="">Todos os anos</option>{years.map((value) => <option key={value}>{value}</option>)}</select></label>
-        {(search || make || model || year || plate) && <button className="storefront-clear-filters" type="button" onClick={() => {
+        {(search || make || model || year || plate || quickFilter) && <button className="storefront-clear-filters" type="button" onClick={() => {
           setSearch('')
+          setQuickFilter('')
           setMake('')
           setModel('')
           setYear('')
@@ -2514,7 +2572,7 @@ function StorefrontShop({
       {vehicleNotice && <p className="form-message" role="status">{vehicleNotice}</p>}
     </div>
     {search.trim() && filteredProducts.length > 0 && <p className="storefront-search-results" role="status">{filteredProducts.length} {filteredProducts.length === 1 ? 'peça encontrada' : 'peças sugeridas'} para “{search}”, ordenadas por semelhança.</p>}
-    {filteredProducts.length ? <div className="storefront-products">{filteredProducts.map((product) => {
+    {filteredProducts.length ? <div id="storefront-products" className="storefront-products">{filteredProducts.map((product) => {
       const quantity = cart[product.id] ?? 0
       return <article key={product.id}>
         {product.image_url ? <img src={product.image_url} alt="" /> : <div className="storefront-product-placeholder"><Package size={24} /></div>}
@@ -2524,7 +2582,9 @@ function StorefrontShop({
       </article>
     })}</div> : <p className="storefront-empty-state">{!catalogLoaded ? 'Carregando produtos da loja…' : search.trim() ? `Não encontramos peças parecidas com “${search}”. Tente menos palavras ou confira a escrita.` : 'Nenhuma peça encontrada para esses filtros. Ajuste a busca ou pesquise pelo modelo.'}</p>}
 
-    {checkoutOpen && <section ref={checkoutSectionRef} className="storefront-checkout" aria-label="Carrinho e finalização da compra">
+    </section>
+    {checkoutOpen && <div className="storefront-drawer-backdrop" onClick={() => setCheckoutOpen(false)}>
+    <aside className="storefront-checkout storefront-cart-drawer" role="dialog" aria-modal="true" aria-label="Carrinho e finalização da compra" onClick={(event) => event.stopPropagation()}>
       <div className="portal-panel-heading"><div><p className="eyebrow">SEU PEDIDO</p><h2><ShoppingCart size={17} /> Carrinho e entrega</h2></div><button className="icon-button" type="button" aria-label="Fechar carrinho" onClick={() => setCheckoutOpen(false)}><X size={18} /></button></div>
       {cartProducts.length ? <div className="storefront-cart-items">{cartProducts.map((product) => <article key={product.id}>
         <div><b>{product.name}</b><small>{cart[product.id]} × {money(Number(product.price))}</small></div>
@@ -2563,8 +2623,9 @@ function StorefrontShop({
         <button className="auth-button auth-button-primary storefront-place-order" type="submit" disabled={checkoutBusy || cartProducts.length === 0 || store.status !== 'active'}>{store.status !== 'active' ? 'Pedidos indisponíveis nesta demonstração' : checkoutBusy ? 'Validando estoque e preparando pagamento…' : userId ? 'Validar pedido e pagar no Asaas' : 'Entrar / criar conta para comprar'}</button>
         <small className="checkout-secure-note">Preço, estoque, frete e total são validados no banco antes de abrir o checkout do Asaas. O pedido só é confirmado após o webhook de pagamento.</small>
       </form>}
-    </section>}
-  </section>
+    </aside>
+    </div>}
+  </>
 }
 
 function StorefrontPage({ slug }: { slug: string }) {
@@ -2573,6 +2634,7 @@ function StorefrontPage({ slug }: { slug: string }) {
     slug: string
     name: string
     logo_url: string | null
+    whatsapp: string | null
     status: string
     brand: { app_name?: string; primary_color?: string; tagline?: string; promotional_banners?: string[]; show_logo_watermark?: boolean }
   } | null>(null)
@@ -2638,24 +2700,9 @@ function StorefrontPage({ slug }: { slug: string }) {
     {masterViewing && store && <MasterViewingBanner tenantName={store.name} />}
     <section className="storefront-shell">
       {store?.logo_url && store.brand.show_logo_watermark !== false && <img className="storefront-watermark" src={store.logo_url} alt="" aria-hidden="true" />}
-      <header className="storefront-heading">
-        <div className="storefront-heading-main">
-          <div className="storefront-brand">
-            {store?.logo_url && <div className="storefront-logo-frame"><img className="storefront-logo" src={store.logo_url} alt={`Logomarca ${store.name}`} /></div>}
-            <div>
-              <p className="eyebrow">VITRINE B2C</p>
-              {error ? <><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></> : store ? <><h1>{store.brand.app_name ?? store.name}</h1><p className="auth-description">{store.brand.tagline || `Vitrine oficial ${store.name}.`}</p></> : <h1>Carregando vitrine…</h1>}
-            </div>
-          </div>
-        </div>
-        <nav className="storefront-account-nav">
-          <a className="auth-subtle-link" href={masterViewing ? '/admin' : '/cliente'}>{masterViewing ? 'Voltar à Central Vancely' : 'Minha conta e pedidos'}</a>
-          {!masterViewing && <a className="auth-button auth-button-secondary" href={`/cliente/entrar?next=${encodeURIComponent(`/loja/${slug}?checkout=1`)}`}><UserRound size={15} /> Entrar</a>}
-        </nav>
-      </header>
-      {store && !error && !!store.brand.promotional_banners?.length && <PromoBannerCarousel banners={store.brand.promotional_banners} />}
-      {store && !error && store.status === 'trial' && <p className="storefront-trial-message">Loja em demonstração: você pode explorar o catálogo, mas pedidos e pagamentos ficam disponíveis após a ativação comercial.</p>}
-      {store && !error && <StorefrontShop store={store} products={products} catalogLoaded={catalogLoaded} pickupEnabled={pickupEnabled} freeUntilKm={freeUntilKm} />}
+      {error && <section className="storefront-heading"><p className="eyebrow">VITRINE B2C / B2B</p><h1>Vitrine indisponível</h1><p className="auth-description">{error}</p></section>}
+      {!store && !error && <section className="storefront-heading"><p className="eyebrow">VITRINE B2C / B2B</p><h1>Carregando vitrine…</h1></section>}
+      {store && !error && <StorefrontShop store={store} products={products} catalogLoaded={catalogLoaded} pickupEnabled={pickupEnabled} freeUntilKm={freeUntilKm} masterViewing={masterViewing} />}
     </section>
   </main>
 }
