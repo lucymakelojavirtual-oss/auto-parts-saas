@@ -267,18 +267,33 @@ function productSearchScore(query: string, product: Pick<CatalogProduct, 'name' 
   return average + (phraseMatch ? 25 : 0)
 }
 
-function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, removeWhiteBackground = false): Promise<Blob> {
+function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, removeWhiteBackground = false, targetAspectRatio?: number): Promise<Blob> {
   return createImageBitmap(file).then((image) => {
     const scale = Math.min(1, maxDimension / Math.max(image.width, image.height))
     const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(image.width * scale))
-    canvas.height = Math.max(1, Math.round(image.height * scale))
+    const scaledWidth = Math.max(1, Math.round(image.width * scale))
+    const scaledHeight = Math.max(1, Math.round(image.height * scale))
+    canvas.width = targetAspectRatio
+      ? Math.min(maxDimension, Math.max(scaledWidth, Math.ceil(scaledHeight * targetAspectRatio)))
+      : scaledWidth
+    canvas.height = targetAspectRatio
+      ? Math.max(1, Math.round(canvas.width / targetAspectRatio))
+      : scaledHeight
     const context = canvas.getContext('2d')
     if (!context) {
       image.close()
       throw new Error('Não foi possível preparar a imagem.')
     }
-    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    if (targetAspectRatio) {
+      context.fillStyle = '#f2f3ef'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      const imageScale = Math.min(canvas.width / image.width, canvas.height / image.height, scale)
+      const imageWidth = image.width * imageScale
+      const imageHeight = image.height * imageScale
+      context.drawImage(image, (canvas.width - imageWidth) / 2, (canvas.height - imageHeight) / 2, imageWidth, imageHeight)
+    } else {
+      context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    }
     image.close()
     if (removeWhiteBackground) {
       const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height)
@@ -328,6 +343,19 @@ function convertImageToWebP(file: File, maxDimension = 800, quality = 0.88, remo
       }, 'image/webp', quality)
     })
   })
+}
+
+function tenantBannerStoragePath(url: string, tenantId: string) {
+  try {
+    const objectPrefix = '/storage/v1/object/public/tenant-media/'
+    const pathname = new URL(url).pathname
+    const prefixIndex = pathname.indexOf(objectPrefix)
+    if (prefixIndex < 0) return null
+    const path = decodeURIComponent(pathname.slice(prefixIndex + objectPrefix.length))
+    return path.startsWith(`tenants/${tenantId}/brand/banners/`) ? path : null
+  } catch {
+    return null
+  }
 }
 
 function isAdminUser(user: User) {
@@ -1346,6 +1374,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
   const [logoUrl, setLogoUrl] = useState(portal.logoUrl)
   const [logoPreview, setLogoPreview] = useState('')
   const [banners, setBanners] = useState(portal.brand.promotional_banners ?? [])
+  const [removedBanners, setRemovedBanners] = useState<string[]>([])
   const [bannerFiles, setBannerFiles] = useState<File[]>([])
   const [bannerPreviews, setBannerPreviews] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
@@ -1394,7 +1423,7 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
       }
       const uploadedBanners: string[] = []
       for (const [index, file] of bannerFiles.entries()) {
-        const image = await convertImageToWebP(file, 1600, 0.82)
+        const image = await convertImageToWebP(file, 1920, 0.84, false, 16 / 7)
         if (image.size > 5 * 1024 * 1024) {
           throw new Error(`A imagem "${file.name}" excede o limite de 5 MB mesmo após a compactação.`)
         }
@@ -1431,6 +1460,19 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
         promotional_banners: updatedBanners,
         show_logo_watermark: showLogoWatermark,
       }, updatedLogoUrl)
+      const removedPaths = removedBanners
+        .map((url) => tenantBannerStoragePath(url, portal.tenantId))
+        .filter((path): path is string => path !== null)
+      if (removedPaths.length) {
+        const { error: removalError } = await client.storage.from('tenant-media').remove(removedPaths)
+        if (removalError) {
+          setError(`Alterações salvas, mas não foi possível excluir ${removedPaths.length} arquivo(s) antigo(s) do Storage: ${removalError.message}`)
+        } else {
+          setRemovedBanners([])
+        }
+      } else {
+        setRemovedBanners([])
+      }
       setNotice('Alterações salvas. A vitrine e o aplicativo do motoboy já estão atualizados.')
     } catch (reason) {
       const saveError = errorText(reason)
@@ -1486,7 +1528,10 @@ function TenantBrandSettings({ portal, onSaved }: { portal: Portal; onSaved: (br
           <div className="brand-banner-grid">
             {banners.map((url, index) => <figure key={url}>
               <img src={url} alt={`Banner promocional ${index + 1}`} />
-              <button type="button" aria-label={`Remover banner ${index + 1}`} disabled={busy} onClick={() => setBanners((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button>
+              <button type="button" aria-label={`Remover banner ${index + 1}`} disabled={busy} onClick={() => {
+                setRemovedBanners((current) => current.includes(url) ? current : [...current, url])
+                setBanners((current) => current.filter((_, itemIndex) => itemIndex !== index))
+              }}><X size={14} /></button>
             </figure>)}
             {bannerFiles.map((file, index) => <figure key={`${file.name}-${index}`}>
               <img src={bannerPreviews[index]} alt={`Prévia do banner ${file.name}`} />
