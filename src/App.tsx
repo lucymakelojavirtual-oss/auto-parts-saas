@@ -203,7 +203,7 @@ function orderStatusLabel(status: string) {
     approved: 'Pedido recebido',
     separating: 'Separando produtos',
     checking: 'Conferindo pedido',
-    delivery: 'Saiu para entrega',
+    delivery: 'Em Trânsito',
     delivered: 'Pedido entregue',
     cancelled: 'Pedido cancelado',
   }
@@ -1740,7 +1740,7 @@ function CourierPortal({ user, portal, onLogout, masterPreview = false }: { user
         <section><small><MapPin size={14} /> DESTINO · {customerName.toLocaleUpperCase('pt-BR')}</small><p>{courierAddressLabel(order.delivery_address)}</p><div><a href={destinationLinks.google} target="_blank" rel="noreferrer">Google Maps <ExternalLink size={12} /></a><a href={destinationLinks.waze} target="_blank" rel="noreferrer">Waze <ExternalLink size={12} /></a></div></section>
       </div>
       <section className="courier-items-check"><h4><PackageCheck size={16} /> Conferência de peças</h4>{order.order_items.map((item) => <div key={`${item.sku}-${item.product_name}`}><span>{item.product_name}<small>SKU {item.sku}</small></span><b>× {item.quantity}</b></div>)}</section>
-      {assigned ? <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id} onClick={() => openCompletion(order)}><CircleCheck size={16} /> Concluir entrega</button> : <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id || masterPreview} onClick={() => void acceptOrder(order)}><Bike size={16} /> {busyOrderId === order.id ? 'Atribuindo…' : 'Aceitar / Retirar na loja'}</button>}
+      {assigned ? <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id} onClick={() => openCompletion(order)}><CircleCheck size={16} /> Confirmar Entrega na Oficina</button> : <button className="auth-button auth-button-primary courier-action-button" type="button" disabled={busyOrderId === order.id || masterPreview} onClick={() => void acceptOrder(order)}><Bike size={16} /> {busyOrderId === order.id ? 'Atribuindo…' : 'Coletar Peça na Loja'}</button>}
     </article>
   }
 
